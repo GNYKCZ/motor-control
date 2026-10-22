@@ -1,0 +1,57 @@
+# Local reference material must never be uploaded.
+资料/
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Development tool installations and installers
+tools/installers/
+*.exe
+*.msi
+*.pack
+*.lnk
+
+# Build directories and generated firmware
+build/
+cmake-build-*/
+Debug/
+Release/
+Objects/
+Listings/
+*.o
+*.obj
+*.d
+*.crf
+*.axf
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.lnp
+*.htm
+*.build_log.htm
+*.dep
+
+# Machine-specific IDE state; keep shared project files tracked.
+*.uvopt
+*.uvoptx
+*.uvgui*
+*.uvguix*
+.vs/
+.idea/
+
+# Caches and temporary files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
