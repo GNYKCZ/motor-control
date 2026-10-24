@@ -3,6 +3,7 @@
 ## Scope
 
 - Mode、仓库、Issue/子阶段、设计评论、PR、base/head 完整 SHA。
+- Version status：`CURRENT / STALE / UNVERIFIED`；记录核对时间、远端 base/head 和本地输入状态。CURRENT 表示与被审版本一致，STALE 表示已变化，UNVERIFIED 表示无法确认；它与下述技术结论分开记录。
 - 本轮验收与实际改动对应；自审或独立 Review 的真实身份。
 - Completeness：COMPLETE / PARTIAL；按覆盖规范给 ledger。
 - 验收矩阵：契约来源、oracle、实际命令/证据、环境/配置/版本、PASS / FAIL / NOT RUN / NOT APPLICABLE。
@@ -34,7 +35,8 @@
 - `PASS`：范围 COMPLETE，没有 P0–P2，当前验收与必要验证充分。
 - `PASS WITH LIMITATIONS`：无 P0–P2，但有 P3 或明确限制；若 PARTIAL，只能表示已覆盖部分，不能视为可合并。
 - `FAIL`：存在确认的 P0–P2 或明确未满足的验收。
+- `INCONCLUSIVE`：必要证据缺失或验证输入无法确认，尚不足以判断当前范围；列明缺口和补证据方法，不能用 PASS WITH LIMITATIONS 代替。若已有足够证据确认缺陷/验收失败，则用 FAIL 并另列证据缺口。
 
-合并建议单列：`APPROVE`（当前 head COMPLETE、无 P0–P2、必要证据齐全）、`REQUEST CHANGES`（需要当前 PR 修复的确认问题/未满足项）、`INCONCLUSIVE`（关键证据不可获得）。必要项 NOT RUN 时不得 APPROVE。
+合并建议单列：`APPROVE`（版本 CURRENT、当前 head COMPLETE、无 P0–P2、必要证据齐全）、`REQUEST CHANGES`（需要当前 PR 修复的确认问题/未满足项）、`INCONCLUSIVE`（关键证据不可获得）。必要项 NOT RUN 或版本 STALE/UNVERIFIED 时不得 APPROVE；旧版本技术结论仅保留为历史记录，不能套用到当前版本。
 
 列遗留风险、未覆盖项、返工轮次和下一负责角色。发布前核对 base/head；新提交后旧报告仅作历史证据。建议合并不等于执行合并的授权，不等于硬件运行许可。
