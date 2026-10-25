@@ -1,0 +1,154 @@
+# M1：先只采样，禁止 PWM 调制
+
+本工程是 Issue #1 的 P0a 软件基线，依据 [架构 #7 v1.1](https://github.com/GNYKCZ/motor-control/issues/7)。
+只实现完整原始采样、设备时间、禁用生命周期和最小串口状态；没有电流闭环、速度/位置控制、
+通电对齐、使能命令或柔顺模式。不要把本批完成理解成整个 P0 已完成。
+
+**输出边界：三路 PWM 永久禁止；功率桥高阻关断仍是未满足项。** 用户已接受先交软件基线。
+本地 V2.0 原理图的 EN1–3、nSLEEP、nRESET 接固定电源，软件不能关闭它们。
+PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的 MOE 和 CCER 保持 0。
+对 DRV8313 来说，这会保持低侧导通制动，而非让电机三相高阻悬空；实际 U4 型号还需看板。
+本轮没有烧录、上电、启动电机，不能据代码或构建宣称真实电气保护有效。
+
+## 从哪里开始阅读
+
+按下面顺序读，自编函数和字段均有中文说明；厂家代码维持原署名与命名，避免改名后难以查手册。
+
+1. [范围与验收](../../docs/m1_sampling_contract.md)：先知道本批做什么，以及不做什么。
+2. [main.c](Core/Src/main.c)：只有初始化、失联检查和前台导出，是整条链的入口。
+3. [board_config.h](board/board_config.h)：本批所有时间上限、计数范围与容量。
+4. [sample_frame.h](board/sample_frame.h) 和 [sample_frame.c](board/sample_frame.c)：原始数值含义、完整帧、CRC 和时间规则。
+5. [motor_runtime.h](app/motor_runtime.h) 和 [motor_runtime.c](app/motor_runtime.c)：谁拥有状态，什么时候进入 FAULT。
+6. [board_io.h](board/board_io.h) 和 [board_io.c](board/board_io.c)：原理图引脚→外设→完成事件；这里才访问硬件。
+7. [telemetry.c](app/telemetry.c)：前台如何导出、串口忙时如何跳过而不拖住采样。
+8. [测试](../../tests/m1/test_sampling.c)、[来源清单](SOURCES.md) 和 [验证记录](../../docs/m1_validation.md)。
+
+## 实际调用链与状态所有权
+
+```text
+Reset_Handler → SystemInit → C 运行库 → main
+  HAL_Init
+  motor_runtime_init → board_disable_output → 建立 BOOT
+  board_initialize_devices → 初始化时钟/引脚/ADC/SPI/UART/定时器
+  motor_runtime_finish_boot → 成功进入 DISABLED，失败进入 FAULT
+  board_start_sampling → 只启动计数/采样事件，不启动 PWM 通道
+  while: motor_runtime_check_deadline + telemetry_poll_status
+
+TIM1 更新 TRGO ─┬→ ADC1/2 同步注入转换
+                └→ TIM2 计数归零，50 us 后比较 IRQ 开始 SSI/DMA
+DMA1 Channel2 TC → 检查完整传输 → CRC/状态校验 → 一次替换 completed_encoder
+ADC1_2 IRQ → 确认双 JEOC → 取完成帧副本 → board_make_sample
+           → motor_runtime_handle_sample → 一次发布状态
+前台 → motor_runtime_read_status（一致复制）→ snprintf（仅前台）
+     → UART TXE/TC IRQ（每次最多一个字节；TC 后释放缓冲）
+```
+
+board 拥有外设、DMA 缓冲、完成编码器帧和设备计数；runtime 拥有生命周期/故障/状态快照；
+telemetry 拥有导出行缓冲。没有可被前台逐字段改写的控制上下文指针，也没有并发环路状态。
+
+- BOOT：尚未准备好采样，不允许把输入当作正常工作包。
+- DISABLED：允许采样，PWM 永久禁止，等待有效首帧最多 1 ms。
+- FAULT：初始化、帧校验、序号、超期、DMA 或 nFAULT 异常锁存；后续好帧也不自动恢复。
+
+本批没有 FAULT 复位/使能串口命令；这两个动作不能因枚举名称或规划存在就视为已支持。
+超时检查使用设备微秒计数；前台先取时间、ADC 后发布新包的交错会被识别，避免误判巨大模差为超时。
+
+## 一个最小数据例子
+
+假设双 ADC 完成时设备计数为 1000 us，采样序号为 123：
+
+```text
+原始 ADC：U=1234，V=2345（12 bit count，不是 A）
+完成编码器：序号123，读取开始950 us，完成972 us，原始角度123 count，Mg=0
+CRC 合格；传输22 us <=40 us；从开始到 ADC 完成50 us <=200 us
+→ 有效完整包 → runtime 保持 DISABLED
+→ M1,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,u=1234,v=2345,a=123,mg=0,ok=1,bad=0,skip=0,pwm=blocked,power=unverified
+```
+
+示例使用主机人工数据，**不是板端采集结果**。真实链路从未完成的 DMA 缓冲读取不到半帧；
+若双 ADC 的任何 JEOC 缺失，本 IRQ 只锁存故障而不构造“完整包”。DMA 完成前保留上个完成包；
+旧包若重复/过期会被 runtime 拒绝，不能把“最近一次读取”冒充新角度。
+
+`t` 是 ADC 完成 IRQ 的设备时间；`es/ec` 是 CS 开始/接收完成事件的设备时间，
+它们构成传输区间，不是传感器内部精确采样时刻。考虑手册 <5 us 内部延迟、SPI 传输和 IRQ
+延迟后，物理角度年龄还需实测/进一步界定。本批不使用角度做实时换相。
+
+串口是 115200、8N1、只有 TX，默认每 100 ms 尝试导出。固定标记 `M1` 表示此格式；
+`s` 为 0=BOOT/1=DISABLED/2=FAULT，`f` 为故障位（1初始化、2采样、4设备），
+`n/e` 分别是 ADC/编码器序号，`u/v/a/mg` 为原始值，`ok` 表示包有效性，
+`bad` 是拒绝计数，`skip` 是导出跳过次数。`power=unverified` 永久提醒本批没有断能证据。
+序号、时间和统计值均允许 32 bit 模回绕。UART 忙时不重写在途缓冲，直接跳过一次并计数；
+物理线断开不一定让 UART 硬件变 busy，因此 `skip=0` 不代表电脑已收到数据，本批没有主机 ACK。
+
+## 时间：哪些是配置推导，哪些还没有测量
+
+| 项目 | 本批值/依据 | 边界 |
+|---|---|---|
+| 主频 | 8 MHz HSE ×9 =72 MHz | 标称配置，尚无板端测量 |
+| APB1/APB2 定时器 | APB1=36 MHz、定时器×2；APB2=72 MHz | 两者定时器时钟均72 MHz |
+| TIM1 | PSC=0、ARR=1799、中心对齐、RCR=3 | 完整上/下计数周期2×1799 tick，约20.011 kHz；本批只计数无 PWM 输出 |
+| ADC TRGO | 每4个边界更新一次，4×1799/72 MHz≈99.944 us | 约10.0056 kHz，不能照宏名直接写40 kHz PWM |
+| ADC 时钟/转换 | 12 MHz；采样7.5 +转换12.5=20周期 | 配置转换约1.667 us，回调延迟另算 |
+| 编码器读取 | TIM2 1 MHz，更新后50 us；SPI 72 MHz/64=1.125 MHz | 24 bit≈21.333 us；完成 IRQ 额外延迟未测 |
+| 设备计时 | TIM4 PSC=71，1 MHz，16 bit计数扩展为32 bit | 65.536 ms溢出 IRQ；不得屏蔽 IRQ 超过一次溢出 |
+| 首帧/年龄/失联 | 1 ms /200 us /300 us | M1 保守软件阈值，不能直接作为闭环采样预算 |
+
+相对参考：TIM1 ARR/RCR 和 ADC 触发关系保留；SSI 开始由更新后78 us 调整为50 us，
+避免24 bit传输几乎挤到下一次 ADC 边界。TIM4 从参考整数分频的约10.2857 MHz
+改为精确配置1 MHz，以避免把7分频误当0.1 us。没有迁移环路增益或改变控制算法，因为 M1 没有控制器。
+
+预期第 k 次 ADC 使用本周期前已完成的一帧；首包没有合法编码器时标无效。
+DMA 迟到/BSY/错误会保守拒绝并可能锁 FAULT，不在中断里等待 SPI 完成。
+CS 在 ADC IRQ 拉高、下一次 TIM2 比较时再拉低；尾保持时间和 ADC/DMA 的实际先后关系待板测。
+
+## 构建与软件测试
+
+目标 STM32F103C8：按标称 **64 KiB Flash、20 KiB RAM** 链接；Cortex-M3，无 FPU，软件浮点 ABI。
+依赖均在仓库内；只需外部编译器和 Python。无需参考目录、DSP 二进制库或安装资料目录。
+Python 使用标准库；实际测试工具版本见验证记录。命令从仓库根目录运行：
+
+```powershell
+python tools/build_m1.py --compiler-bin 'D:\Keil_v5\ARM\ARMCLANG\bin'
+python tools/test_m1.py --gcc 'D:\mingw64\bin\gcc.exe'
+python tools/generate_m1_mdk.py --check
+python tools/verify_m1.py
+```
+
+若 `python` 不在 PATH，可用本机 Python 完整路径；不要把 Python 安装目录加入工程。
+目标构建冻结为 ARM Compiler 6.13.1、C11、O2、MicroLIB。自编代码 `-Wall -Wextra -Werror`；
+厂家代码警告保留在日志。本机 HAL ADCEx 有一条多余括号警告，不为清零警告改第三方源码。
+
+输出在 `build/m1/`：axf、hex、map、静态调用图和 `build_evidence.json`；
+主机测试证据在 `build/host_m1/test_evidence.json`。记录会明确当前完整 HEAD 与未提交修改，
+并记录每个构建输入哈希；未提交工作区的 PASS 不能冒充干净 commit 的验证。
+
+MDK 用户可打开 [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)，选择 `m1_sampling` 后只 Build：
+
+```powershell
+& 'D:\Keil_v5\UV4\UV4.exe' -r firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx -t m1_sampling -o "$PWD\build\m1\mdk_build.log"
+```
+
+MDK 在本机返回后需核对日志里的 `0 Error(s)` 与实际产物，GUI 程序启动成功不等于构建成功。
+原 MDK/Cube 目录习惯保留，原 `.ioc` 未复制；新 CubeMX 再生成入口尚未验证，见 [来源说明](SOURCES.md)。
+此处所有命令只构建/运行主机测试，不执行下载和调试。
+
+## 中文术语表与命名
+
+| 英文/缩写 | 中文 | 本项目用途 |
+|---|---|---|
+| board / runtime / telemetry | 板级 / 运行管理 / 状态导出 | 三个状态所有者，职责不交叉 |
+| raw / measured / target / limited | 原始 / 测量 / 目标 / 受限后 | M1 只用 raw，不冒称已校准 measured current |
+| sequence / is_valid | 序号 / 是否有效 | 判断重复、完整性与时间规则 |
+| ADC (Analog-to-Digital Converter) | 模数转换器 | PA0/1 两路原始电流电压采样 |
+| PWM (Pulse-Width Modulation) | 脉宽调制 | 本批永久禁止输出，计数触发和输出使能分开 |
+| DMA (Direct Memory Access) | 直接内存访问 | SSI 三字节接收；只有完整后才能发布 |
+| SPI / SSI | 串行外设接口 / 同步串行接口 | STM32 SPI 用作 MT6701 SSI 时钟与接收 |
+| CRC | 循环冗余校验 | 用18 bit数据和6 bit校验判断帧损坏 |
+| JEOC / TC / TXE | 注入转换完成 / 传输完成 / 发送寄存器空 | 通过硬件事件判断阶段完成 |
+| PRIMASK / critical section | 中断屏蔽状态 / 临界区 | 保存旧值、屏蔽、复制完整对象、恢复旧值 |
+| MOE / CCER / TRGO | 主输出使能 / 通道使能寄存器 / 触发输出 | 采样触发可工作，但 MOE/通道不开放 |
+| FOC / PI / d/q | 磁场定向控制 / 比例积分 / 旋转坐标轴 | 后续 M2，M1 没有实现 |
+
+物理单位后缀保留标准大小写，例如 `_us`、`_rad_s`、`_A`；本批原始计数用 `_count`，
+不能仅改名加 `_A` 就当作已标定电流。厂家函数不重命名；新增函数采用模块+动作+对象，
+公共接口不用 cfg/ctx/fdb/tmp。注释讲明作用、调用前提、状态与错误，避免只逐行翻译语法。

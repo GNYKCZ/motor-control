@@ -1,0 +1,242 @@
+{
+  "reference_url": "https://gitee.com/best_pureer/stm32_foc_2",
+  "reference_commit": "672e32f1005d9019140d1a9c754fb8ca2e8eedde",
+  "reference_workspace_note": "本地 MDK 工程有既有修改；未引入该文件。",
+  "custom_motor_code": "NOT IMPORTED: no root license specified",
+  "files": [
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h",
+      "sha256": "701749189012d2bda33a629f2baf420b8a870b517b74ef43dc4311740beb804a",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_def.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_def.h",
+      "sha256": "dcc6db49aeb887d662d15c1c32e4dca10b76b40c33a84a1059d547159ebeac4d",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_cortex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_cortex.h",
+      "sha256": "eedb42e4f4f197cec250e18faa1a32711019c72ddec956fbc7596032f5228315",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio.h",
+      "sha256": "3ae8ac366a2a55952fc4bada166e88f6d15fb884492048191f267f79ffa73d44",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_gpio_ex.h",
+      "sha256": "769eb507539209ec99906cb586e60c760c96ffcede2754e5c43717404e3f18de",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc.h",
+      "sha256": "71da2ae8862651d9ce72dad10c1d649ceb7f7badc5317b64e87449597add78a2",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_rcc_ex.h",
+      "sha256": "fa0d67a0bf02d81df5f6b96247d30aee26bc97ebf4d6b2be872b60fc7ca0851c",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma.h",
+      "sha256": "34c7acd9bfd2f72cd08db6653484917c7ce6b5ec5ebc0d1d5f49c9ade9148e50",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_dma_ex.h",
+      "sha256": "231bbebf3511e3ac40babed7b42bc6c279a77b699bb28d1c57d53c4868214c41",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash.h",
+      "sha256": "2507e53dab0c8340e4d8189929a46f34d25b059bdaa639cf1c754f186f240245",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_flash_ex.h",
+      "sha256": "97a07ef38d87cc332fd30011a68e02725e112163f13259210e0f4a7f39476e98",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_adc.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_adc.h",
+      "sha256": "0c7c9c2d9124533192ff5033060d253ed401ad0a000d74ed5103c851c371fdc5",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_adc_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_adc_ex.h",
+      "sha256": "cbb46e52a3d1c3e572e9bc90a77544f24063fc3515a0f78eb1f1caa9e2c58d9d",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_spi.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_spi.h",
+      "sha256": "597a9c4033af4dfaacbbf6053cabf4fe03277008f3b9a4e6113aa5d1c0fcee5c",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h",
+      "sha256": "8e75ea51307d1fcae4e06ccd1189ec325059cf8e36e18e501bc064b142d7aaa0",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
+      "sha256": "6650fcfa559dca126b91c6c0f576e3dec25ddb26811c55e294cbcc01888a85ec",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_cortex.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_cortex.c",
+      "sha256": "024427c57b2f4413fe95806fb5e91b3703093d9b132f4976bd9a1525989f6e23",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio.c",
+      "sha256": "a2e12792c9d49eecdc567ab9fc1a49ed90723007f9579b702c28960dfd83e121",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc.c",
+      "sha256": "5316062f62ea8b049b49f8e3d78102ba5ddd744ed975e1e627cf826cbab9e501",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc_ex.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_rcc_ex.c",
+      "sha256": "eb7503a6a1f0b7bfd7488bd851ae3cac2b88194f344847c74e0a15e563b41db1",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_dma.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_dma.c",
+      "sha256": "0662e01264be0233a4f8f2206dadf1c223caa17fd54c3b0e2d4a1ae771bd9c2b",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc.c",
+      "sha256": "9d91eaca94248030b144b333ddd0faa00c581541e73c4a0bd6ed64c0150a5fdb",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc_ex.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_adc_ex.c",
+      "sha256": "58dd34159fdca4b68eedcc8708dae34ca0f525630339c5eb8162653d463a5249",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_spi.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_spi.c",
+      "sha256": "59f07b164acc82a90aba2b97e83340c2287d702307a79d9299b0e80855e0f899",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_uart.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_uart.c",
+      "sha256": "12921c287574a4eb75aa2b71a2e590963b4f869a3b05e1532d495390412df3b8",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/LICENSE.txt",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/LICENSE.txt",
+      "sha256": "bdc7b0f98db4846279336431024c49a01d578a2ea1d19ec68797bbe33e718d2d",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h",
+      "sha256": "9bfd2b97037977881ab92615ac8cd224241d458be4c2ba12a83c543cffb6db80",
+      "license": "BSD-3-Clause (component fallback)"
+    },
+    {
+      "source": "Drivers/CMSIS/LICENSE.txt",
+      "destination": "Drivers/CMSIS/LICENSE.txt",
+      "sha256": "e03ba41d7fab20700769fe4118bab50d800cb74f990353a05d2f5fff1c228363",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Device/ST/STM32F1xx/LICENSE.txt",
+      "destination": "Drivers/CMSIS/Device/ST/STM32F1xx/LICENSE.txt",
+      "sha256": "1bb504d5227c73a9438246114afc9fe9b76bd8c349a28fcecf0b76d751764439",
+      "license": "Apache-2.0 (component fallback)"
+    },
+    {
+      "source": "Drivers/CMSIS/Include/core_cm3.h",
+      "destination": "Drivers/CMSIS/Include/core_cm3.h",
+      "sha256": "368296087a925cf78133d27e0854d748605441915e0f4fece93f2f97eea68adb",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Include/cmsis_compiler.h",
+      "destination": "Drivers/CMSIS/Include/cmsis_compiler.h",
+      "sha256": "cd3cbd1c771a5252827a14c75a12e7ed975f76b9fc1577d53a74ba0e7c1af6c3",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Include/cmsis_version.h",
+      "destination": "Drivers/CMSIS/Include/cmsis_version.h",
+      "sha256": "280b9fc8739aefa878d47e68d7adbd4908a15f98ec193cdba1a4b514133f5c34",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Include/cmsis_armclang.h",
+      "destination": "Drivers/CMSIS/Include/cmsis_armclang.h",
+      "sha256": "da29dbad3cf27f6c86437af6bd0b302e105210742ad7a602bea51b104f1661c9",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Include/mpu_armv7.h",
+      "destination": "Drivers/CMSIS/Include/mpu_armv7.h",
+      "sha256": "b0b6da4ec744b5f547a94e60e24b0a6ff6bb7307d3f81a83d0b7c3a64dc29326",
+      "license": "Apache-2.0"
+    },
+    {
+      "source": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h",
+      "destination": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f103xb.h",
+      "sha256": "4744170a3b00118283823ab4e86b989b014aecfe43e0e55403982369cf5fef21",
+      "license": "Apache-2.0 (component fallback)"
+    },
+    {
+      "source": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h",
+      "destination": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/stm32f1xx.h",
+      "sha256": "65e7d272bdc9ffc9e1a6682c20d9f2a1073f3e76b05264f247cbe57987331a07",
+      "license": "Apache-2.0 (component fallback)"
+    },
+    {
+      "source": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h",
+      "destination": "Drivers/CMSIS/Device/ST/STM32F1xx/Include/system_stm32f1xx.h",
+      "sha256": "8b48ff3463b1c01394bd82e40154b73a288d275e2437923662b40061e88d4a92",
+      "license": "Apache-2.0 (component fallback)"
+    },
+    {
+      "source": "Core/Src/system_stm32f1xx.c",
+      "destination": "Core/Src/system_stm32f1xx.c",
+      "sha256": "6d73104f1f3c9835f5e1a2b53ef59c98b5015675acdc09124d55ac9fe42dee79",
+      "license": "Apache-2.0 (device component fallback)"
+    },
+    {
+      "source": "MDK-ARM/startup_stm32f103xb.s",
+      "destination": "MDK-ARM/startup_stm32f103xb.s",
+      "sha256": "14e74389fc31a3b09019170dc5c733d922c4cf199290e98582b3c0cee7176683",
+      "license": "Apache-2.0 (device component fallback)"
+    }
+  ]
+}

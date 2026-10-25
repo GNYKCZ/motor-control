@@ -42,6 +42,7 @@ Listings/
 *.uvoptx
 *.uvgui*
 *.uvguix*
+firmware/stm32f103/MDK-ARM/DebugConfig/
 .vs/
 .idea/
 
