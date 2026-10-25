@@ -5,3 +5,22 @@
 firmware/stm32f103/Drivers/** -text -whitespace
 firmware/stm32f103/Core/Src/system_stm32f1xx.c -text -whitespace
 firmware/stm32f103/MDK-ARM/startup_stm32f103xb.s -text -whitespace
+
+# CubeMX generated regions retain ST whitespace; USER CODE checked by verify_m1.
+firmware/stm32f103/Core/Inc/adc.h -whitespace
+firmware/stm32f103/Core/Inc/dma.h -whitespace
+firmware/stm32f103/Core/Inc/gpio.h -whitespace
+firmware/stm32f103/Core/Inc/main.h -whitespace
+firmware/stm32f103/Core/Inc/spi.h -whitespace
+firmware/stm32f103/Core/Inc/tim.h -whitespace
+firmware/stm32f103/Core/Inc/usart.h -whitespace
+firmware/stm32f103/Core/Inc/stm32f1xx_hal_conf.h -whitespace
+firmware/stm32f103/Core/Src/adc.c -whitespace
+firmware/stm32f103/Core/Src/dma.c -whitespace
+firmware/stm32f103/Core/Src/gpio.c -whitespace
+firmware/stm32f103/Core/Src/main.c -whitespace
+firmware/stm32f103/Core/Src/spi.c -whitespace
+firmware/stm32f103/Core/Src/tim.c -whitespace
+firmware/stm32f103/Core/Src/usart.c -whitespace
+firmware/stm32f103/Core/Src/stm32f1xx_hal_msp.c -whitespace
+firmware/stm32f103/LICENSES/STM32CubeF1-*.md -text -whitespace

@@ -237,6 +237,62 @@
       "destination": "MDK-ARM/startup_stm32f103xb.s",
       "sha256": "14e74389fc31a3b09019170dc5c733d922c4cf199290e98582b3c0cee7176683",
       "license": "Apache-2.0 (device component fallback)"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim.h",
+      "sha256": "7a3dac99a810297b21b785846927dea4b1a43f854b2bd19e0f6b3af767e4eda9",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_tim_ex.h",
+      "sha256": "21f24eb4e1b8eaeeb50240dbb0c177619f55cd4b12e366ddf4105c269ff628ac",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_pwr.h",
+      "sha256": "1353dc09e32e7e6ec686b725b80981a9286c7e8b5383f8f4259f672470d481c3",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_exti.h",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_exti.h",
+      "sha256": "745bd5b830259f613d116286a445d18c26677a72170117f2b35b7e0607fd563c",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim.c",
+      "sha256": "d48299529390beba290db650bdac9851d69b9c127d6f9f7bd3dc9f205c843aaf",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c",
+      "destination": "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c",
+      "sha256": "5f129af0c70c87e7c960c11cc046864d5d2f3963b4a952526d306a88d3295c0d",
+      "license": "BSD-3-Clause (FW_F1 package component table)",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "License.md",
+      "destination": "LICENSES/STM32CubeF1-components.md",
+      "sha256": "92282b534952354891151c90af2f935f311fb3b3be9deed1eae8410599443a39",
+      "license": "Original package licensing notice",
+      "origin": "STM32Cube FW_F1 V1.8.6"
+    },
+    {
+      "source": "Package_license.md",
+      "destination": "LICENSES/STM32CubeF1-package.md",
+      "sha256": "96ffa57e15fde5ee0f759389d30ee7bd23e54ccf44aa85567678a28de6542dcd",
+      "license": "Original package licensing notice",
+      "origin": "STM32Cube FW_F1 V1.8.6"
     }
   ]
 }
