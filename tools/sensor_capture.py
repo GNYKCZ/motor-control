@@ -77,13 +77,19 @@ def save_chunks(chunks, output, metadata):
     info = {**metadata, "tool": "sensor_capture_v1", "python": platform.python_version(),
             "tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "started_at_utc": datetime.now(timezone.utc).isoformat(), "valid_lines": 0, "invalid_lines": 0}
+    info["invalid_count_unit"] = "error record or overlong physical-line fragment"
     pending = b""
+    overlong_line = False
+    physical_line = 1
     with (output / "raw.bin").open("wb") as original, (output / "records.jsonl").open("w", encoding="utf-8") as records:
-        def store_line(line):
+        def store_line(line, forced_error=None):
             """原字节hex与可读替代文本共同保留；解析失败不会删除或改写原始数据。"""
             record = {"host_time_utc": datetime.now(timezone.utc).isoformat(), "raw_hex": line.hex(),
-                      "raw_text": line.decode("ascii", errors="replace"), "fields": None, "error": None}
+                      "raw_text": line.decode("ascii", errors="replace"), "fields": None, "error": None,
+                      "physical_line": physical_line, "is_line_fragment": forced_error is not None}
             try:
+                if forced_error is not None:
+                    raise ValueError(forced_error)
                 if len(line) > 2048:
                     raise ValueError("line exceeds 2048-byte parser bound")
                 record["fields"] = parse_line(line)
@@ -99,15 +105,22 @@ def save_chunks(chunks, output, metadata):
                 original.write(chunk); original.flush(); pending += chunk
                 while b"\n" in pending or len(pending) > 2048:
                     end = pending.find(b"\n") + 1
+                    # RV-001：固定长度分片不是物理行边界。一旦超长，该行所有尾片段都
+                    # 保持错误归属；仅真实换行后恢复正常解析，避免合法格式尾部被提升为采样。
+                    if end == 0 or end > 2048:
+                        overlong_line = True
                     if end == 0 or end > 2049:
                         end = 2049
                     line, pending = pending[:end], pending[end:]
-                    store_line(line)
+                    store_line(line, "overlong physical line or continuation fragment" if overlong_line else None)
+                    if line.endswith(b"\n"):
+                        overlong_line = False
+                        physical_line += 1
         except KeyboardInterrupt:
             info["stopped_by_operator"] = True
         finally:
             if pending:
-                store_line(pending)
+                store_line(pending, "unterminated overlong physical-line fragment" if overlong_line else None)
             info["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
             (output / "metadata.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return info

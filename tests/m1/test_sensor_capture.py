@@ -14,6 +14,32 @@ def require(condition):
         raise RuntimeError("synthetic capture contract failed")
 
 
+def check_overlong_boundaries(good, temporary, metadata):
+    """RV-001：物理坏行内部的合法尾部不是新行，真实换行后才可重新接受。"""
+    poisoned = b"x" * 2049 + good + good
+    for chunk_size in (len(poisoned), 37, 1, 2048, 2049):
+        output = temporary / ("overlong_" + str(chunk_size))
+        info = save_chunks([poisoned[i:i+chunk_size] for i in range(0,len(poisoned),chunk_size)], output, metadata)
+        records = [json.loads(line) for line in (output / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+        require(info["valid_lines"] == 1)
+        require([r["physical_line"] for r in records] == [1,1,2])
+        require(all(r["fields"] is None and r["is_line_fragment"] for r in records[:-1]))
+        require(records[-1]["fields"] is not None and not records[-1]["is_line_fragment"])
+        require((output / "raw.bin").read_bytes() == poisoned)
+        require(b"".join(bytes.fromhex(r["raw_hex"]) for r in records) == poisoned)
+    padded = [good.replace(b"skip=0,", b"skip=" + b"0" * (size-len(good)+1) + b",") for size in (2047,2048,2049)]
+    require([len(line) for line in padded] == [2047,2048,2049])
+    data = b"".join(padded) + good
+    output = temporary / "size_edges"
+    info = save_chunks([data[i:i+17] for i in range(0,len(data),17)], output, metadata)
+    require(info["valid_lines"] == 3 and info["invalid_lines"] == 1)
+    records = [json.loads(line) for line in (output / "records.jsonl").read_text(encoding="utf-8").splitlines()]
+    require([r["physical_line"] for r in records] == [1,2,3,4])
+    require(records[2]["fields"] is None and records[3]["fields"] is not None)
+    require((output / "raw.bin").read_bytes() == data)
+    print("PASS RV-001: overlong physical-line ownership, 2048/2049 edges, chunk/newline boundaries and recovery")
+
+
 def main():
     lines = (ROOT / "tests/m1/synthetic_m2c.txt").read_bytes().splitlines(keepends=True)
     parsed = parse_line(lines[0])
@@ -37,6 +63,7 @@ def main():
     metadata = {"source_kind": "synthetic", "firmware_sha": "0" * 40,
                 "board": "synthetic", "motor": "synthetic/disconnected", "supply": "none"}
     with tempfile.TemporaryDirectory(dir=ROOT / "build", prefix="capture_test_") as temporary:
+        check_overlong_boundaries(lines[0], Path(temporary), metadata)
         output = Path(temporary) / "saved"
         info = save_chunks([stream[i:i+37] for i in range(0,len(stream),37)], output, metadata)
         require((output / "raw.bin").read_bytes() == stream)

@@ -74,6 +74,9 @@ UART文本无额外传输CRC；ok只描述原采样包验证，不证明串口�
 [保存工具](../tools/sensor_capture.py)保留raw.bin和每行raw_hex/raw_text/字段/错误/设备原32位时间，
 metadata.json包含现场填的完整固件SHA、板卡/电机/供电限流、source_kind、工具版本/哈希、UTC起止。
 不删坏行、半行、未知版本或超长数据；不把时间回绕擅自改成主机绝对时间；旧M1也可解析。
+超长物理行可拆为有界片段，但所有片段共享physical_line编号并保持错误，真实换行后才恢复解析；
+is_line_fragment标记这些片段。valid_lines只统计完整有效物理行，invalid_lines统计错误记录/片段，
+元数据invalid_count_unit显式说明该计数单位，不将坏行尾部当作新采样。
 仅新建输出目录，Ctrl+C保留已有数据。文件解析不需要串口库，现场--port需pyserial3.5且只读不发命令。
 串口收集本批NOT RUN。所有示例和测试文件明确为synthetic，不是实测记录。
 
