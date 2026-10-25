@@ -18,6 +18,10 @@ def main():
     reference = arguments.reference.resolve()
     root = Path(__file__).resolve().parents[1]
     target = root / "firmware/stm32f103"
+    manifest_path = target / "vendor_sources.json"
+    if manifest_path.exists() and any(item.get("origin") for item in json.loads(
+            manifest_path.read_text(encoding="utf-8"))["files"]):
+        raise SystemExit("当前清单已含 CubeMX 修正所需的固件包依赖；本工具仅适用于最初39项来源导入，拒绝覆盖混合来源清单。")
     git_command = ["git", "-c", f"safe.directory={reference.as_posix()}", "-C", str(reference)]
     expected_commit = "672e32f1005d9019140d1a9c754fb8ca2e8eedde"
     actual_commit = subprocess.check_output(git_command + ["rev-parse", "HEAD"], text=True).strip()

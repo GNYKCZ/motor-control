@@ -1,6 +1,6 @@
 # M1：先只采样，禁止 PWM 调制
 
-本工程是 Issue #1 的 P0a 软件基线，依据 [架构 #7 v1.1](https://github.com/GNYKCZ/motor-control/issues/7)。
+本工程是 Issue #1 的 P0a 软件基线，初始化现依据 [架构 #7 v1.4](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393651536)。
 只实现完整原始采样、设备时间、禁用生命周期和最小串口状态；没有电流闭环、速度/位置控制、
 通电对齐、使能命令或柔顺模式。不要把本批完成理解成整个 P0 已完成。
 
@@ -25,20 +25,21 @@ PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的
 
 ## 从现有例程找到本项目对应代码
 
-**本批直接复用了 39 个厂家文件；应用层和采样适配是参考例程配置/数据流后自编的，
+**最初直接复用了 39 个厂家文件；本次增加6个固件包依赖及2个原始许可文件，共47项。
+外设初始化由 CubeMX 6.12.0 实际生成；应用层和采样适配是参考例程配置/数据流后自编的，
 作者的 FOC、PI 包装和模式代码尚未迁入。** “参考已有例程”不等于“所有文件原样复制”。
 下面左侧路径以进阶例程 `stm32_foc_2` 为根，右侧链接以本工程为根；基础例程用于对照学习。
-这是 [Issue #7 的 v1.2 来源说明补充](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393305178)，
-本次只补文档，M1 的只采样行为与验收范围不变。
+来源分类延续 [Issue #7 v1.2](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393305178)，
+本次按 v1.4 恢复可再生成的初始化，M1 的只采样行为不变。
 
 | 原例程入口 | 本项目对应入口 | 处理方式与学习重点 |
 |---|---|---|
-| `stm32_foc_test.ioc` | [board_config.h](board/board_config.h)、[board_io.c](board/board_io.c) | **参考配置，原文件未引入**：沿用芯片、引脚与采样信号链；没有可直接再生成本工程的 `.ioc` |
-| `Core/Src/main.c` | [main.c](Core/Src/main.c)、[motor_runtime.c](app/motor_runtime.c) | **参考改写，自编适配**：将原来的自动 PWM/对齐/默认电流启动，改为先建状态、只启动采样、保持 DISABLED |
-| `Core/Src/adc.c` | [board_io.c](board/board_io.c)、[sample_frame.c](board/sample_frame.c) | **参考改写，自编适配**：双 ADC 完成才发布原始值；旧回调里的 FOC/电流环不进入 M1 |
-| `Core/Src/spi.c` | [board_io.c](board/board_io.c)、[sample_frame.c](board/sample_frame.c) | **参考改写，自编适配**：保留 SPI/DMA 读取思路，分开发送/接收缓冲，增加完成检查、CRC、序号与读取时间区间 |
-| `Core/Src/tim.c` | [board_config.h](board/board_config.h)、[board_io.c](board/board_io.c) | **参考配置后改写**：保留 TIM1→双 ADC、TIM2 延时读角度、TIM4 计时；读取时点和计时分频的变化见下文时间表；不保留 TIM3 多处修改控制状态的路径 |
-| `Core/Src/usart.c` | [telemetry.c](app/telemetry.c)、[board_io.c](board/board_io.c) | **参考配置后改写**：沿用 USART2 引脚/波特率；原阻塞 `fputc` 改为前台格式化、TXE/TC 中断发送 |
+| `stm32_foc_test.ioc` | [m1_sampling.ioc](m1_sampling.ioc) | **参考配置，新建目标**：保留芯片/引脚/时钟事实，移除 PWM、TIM3、DSP 扩展和原启动假设 |
+| `Core/Src/main.c` | [main.c](Core/Src/main.c)、[motor_runtime.c](app/motor_runtime.c) | **CubeMX 生成 + 自编 USER CODE**：生成时钟/外设调用，USER CODE 建立状态、启动采样并轮询导出 |
+| `Core/Src/adc.c` | [adc.c](Core/Src/adc.c)、[board_io.c](board/board_io.c) | **CubeMX 生成配置 + 自编完成事件**：双 ADC 注入同步；双 JEOC 才发布原始值 |
+| `Core/Src/spi.c`、DMA | [spi.c](Core/Src/spi.c)、[dma.c](Core/Src/dma.c)、[board_io.c](board/board_io.c) | **CubeMX 生成基础配置 + 自编 DMA 事务**：配置 SPI1/双 DMA；board 管理缓冲、CRC/长度/时间和完整发布 |
+| `Core/Src/tim.c` | [tim.c](Core/Src/tim.c)、[board_io.c](board/board_io.c) | **CubeMX 生成**：TIM1 仅计数/TRGO，TIM2 50 us，TIM4 1 MHz；board 只清状态、起动计数/事件和扩展时间 |
+| `Core/Src/usart.c` | [usart.c](Core/Src/usart.c)、[telemetry.c](app/telemetry.c) | **CubeMX 生成 + 自编非阻塞发送**：115200/8N1 TX；TXE/TC IRQ 由 board 独占 |
 | `Drivers/motor/foc.c`、`foc.h` 及控制参数/查表 | **M1 暂未引入**；未来控制核位置见 [SOURCES.md](SOURCES.md) | 当前无控制环调用者，作者自定义源码公开再发布许可尚未明确；不能把可运行参考工程冒称本仓库已移植 FOC |
 | HAL/CMSIS、ST 系统和启动模板 | [Drivers/](Drivers/)、[system_stm32f1xx.c](Core/Src/system_stm32f1xx.c)、[startup](MDK-ARM/startup_stm32f103xb.s) | **直接原样复用**：39 个必要厂家文件逐项保留原字节、许可与署名，见 [准确来源/哈希清单](vendor_sources.json) |
 | `MDK-ARM/stm32_foc_test.uvprojx` | [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)、[project_sources.json](project_sources.json) | **保留工程形态，重建源清单**：沿用 ARM Compiler/O2 约束，原项目文件未直接复制 |
@@ -54,7 +55,8 @@ PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的
 Reset_Handler → SystemInit → C 运行库 → main
   HAL_Init
   motor_runtime_init → board_disable_output → 建立 BOOT
-  board_initialize_devices → 初始化时钟/引脚/ADC/SPI/UART/定时器
+  SystemClock_Config + MX_GPIO/DMA/ADC1/ADC2/SPI1/TIM1/TIM2/TIM4/USART2_Init
+  board_initialize_devices → 校准 ADC、启用 SPI、清初始化状态并起动 TIM4
   motor_runtime_finish_boot → 成功进入 DISABLED，失败进入 FAULT
   board_start_sampling → 只启动计数/采样事件，不启动 PWM 通道
   while: motor_runtime_check_deadline + telemetry_poll_status
@@ -68,7 +70,7 @@ ADC1_2 IRQ → 确认双 JEOC → 取完成帧副本 → board_make_sample
      → UART TXE/TC IRQ（每次最多一个字节；TC 后释放缓冲）
 ```
 
-board 拥有外设、DMA 缓冲、完成编码器帧和设备计数；runtime 拥有生命周期/故障/状态快照；
+CubeMX 拥有外设参数、HAL 句柄、MSP/NVIC；board 拥有 DMA 事务、完成编码器帧和设备计数；runtime 拥有生命周期/故障/状态快照；
 telemetry 拥有导出行缓冲。没有可被前台逐字段改写的控制上下文指针，也没有并发环路状态。
 
 - BOOT：尚未准备好采样，不允许把输入当作正常工作包。
@@ -154,8 +156,34 @@ MDK 用户可打开 [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)，选择 
 ```
 
 MDK 在本机返回后需核对日志里的 `0 Error(s)` 与实际产物，GUI 程序启动成功不等于构建成功。
-原 MDK/Cube 目录习惯保留，原 `.ioc` 未复制；新 CubeMX 再生成入口尚未验证，见 [来源说明](SOURCES.md)。
+MDK 项目由显式源清单生成；CubeMX 负责初始化源码，两者交付同一套固件，见 [来源说明](SOURCES.md)。
 此处所有命令只构建/运行主机测试，不执行下载和调试。
+
+## CubeMX 再生成与所有权
+
+使用 **CubeMX 6.12.0、FW_F1 1.8.6**。从仓库根运行，路径按本机安装位置填写：
+
+```powershell
+python tools/regenerate_m1.py --cubemx 'D:\FOC_Tools\STM32CubeMX-6.12.0\STM32CubeMX.exe' --package "$env:USERPROFILE\STM32Cube\Repository\STM32Cube_FW_F1_V1.8.6"
+```
+
+默认在全新 `build/cubemx_<时间>/generated` 目录实际生成并只读比较；16 个生成文件完全相同才通过。
+输出保留实际命令、完整日志、工具/配置/输入及结果哈希。检查通过后若确需更新生成内容，在同一命令末尾加
+`--write`。仅导入清单内文件、统一 LF，保留正式 `main.c` 的同名 USER CODE 区；ST Header 不豁免对比。
+生成代码其余部分不手改。先改 `.ioc`，重新生成，再构建和回归；更新源码清单后运行 MDK 生成器。
+工具版本/年份改变造成 Header 差异也需明确复核。逐项证据见 [本次验证](../../docs/cubemx_validation.md)。
+
+外设 `.c/.h` 和全局 MSP 原样生成，无手工寄存器参数覆盖。PA3 因 CubeMX F1 的 Asynchronous 模式要求
+TX/RX 引脚成对选择而保留为输入，但 `UartMode=UART_MODE_TX`，不会开启接收。
+`board_initialize_devices` 只执行校准、SPI SPE 运行使能、清 UG 状态和起动 TIM4；采样起动另由
+`board_start_sampling` 负责。`board_disable_output` 是初始化前及故障时可调用的独立门控，始终把
+PA8/9/10 设为 GPIO 低并清 MOE/CCER；它与生成 GPIO 低电平配置一致，不覆盖外设参数。
+复位到 `motor_runtime_init` 前引脚仍遵循芯片复位状态，软件不能保证上电全过程的电气状态。
+
+CubeMX 还会输出 IRQ 路由和临时 system/工程片段，它们不导入、不参与正式构建。
+本项目保留自编 [Cortex 异常路由](Core/Src/stm32f1xx_it.c) 和 board 外设 IRQ，
+避免生成 HAL IRQ 与完整帧发布路径争用标志；ST system/startup 仍取来源清单内的原始模板。
+不要直接在正式目录点击“生成工程”覆盖这些文件，应通过上述受限导入入口更新。
 
 ## 中文术语表与命名
 

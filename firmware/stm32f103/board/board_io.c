@@ -1,4 +1,4 @@
-/** STM32F103C8 板级适配：拥有外设句柄、DMA 缓冲、设备时间和 UART 借用状态。
+/** STM32F103C8 板级适配：使用生成的外设句柄，拥有 DMA 缓冲、设备时间和 UART 借用状态。
  * 完成事件进入 runtime；SPI 接收缓冲永不直接向前台公开，前台只读 runtime 快照。
  * M1 仅采样。PA8/9/10 固定 GPIO 低，绝不配置为 PWM AF；无法控制驱动 EN/nSLEEP。 */
 #include "board_io.h"
@@ -6,12 +6,9 @@
 #include "sample_frame.h"
 #include "motor_runtime.h"
 #include "main.h"
+#include "adc.h"
 #include <stddef.h>
 
-static ADC_HandleTypeDef adc_u;          /**< ADC1/PA0，board 独占。 */
-static ADC_HandleTypeDef adc_v;          /**< ADC2/PA1，board 独占。 */
-static SPI_HandleTypeDef encoder_spi;   /**< SPI1，仅用于初始化；运行用有界 DMA 事件。 */
-static UART_HandleTypeDef status_uart;  /**< USART2，仅用于初始化；发送用 TXE/TC IRQ。 */
 static volatile uint8_t encoder_receive_bytes[3];/**< DMA 写入的硬件内存；volatile 强制实际读取，不承担帧一致性。 */
 static const uint8_t encoder_clock_bytes[3] = {0u, 0u, 0u}; /**< 仅用于产生 24 个时钟。 */
 static board_encoder_frame_t completed_encoder; /**< 只在 RX TC 之后整体替换。 */
@@ -67,182 +64,38 @@ uint32_t board_get_time_us(void)
     return high_us + low_us;
 }
 
-/** 配置 8 MHz HSE→72 MHz，APB1=36 MHz（定时器倍频到72），ADC=12 MHz。
- * 前台唯一调用；HAL 初始化的超时只出现在启动阶段，不在采样 IRQ 内等待。 */
-static bool board_initialize_clock(void)
-{
-    RCC_OscInitTypeDef oscillator = {0};
-    RCC_ClkInitTypeDef clock = {0};
-    RCC_PeriphCLKInitTypeDef peripheral = {0};
-    oscillator.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    oscillator.HSEState = RCC_HSE_ON;
-    oscillator.HSIState = RCC_HSI_ON;
-    oscillator.PLL.PLLState = RCC_PLL_ON;
-    oscillator.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-    oscillator.PLL.PLLMUL = RCC_PLL_MUL9;
-    if (HAL_RCC_OscConfig(&oscillator) != HAL_OK) {
-        return false;
-    }
-    clock.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-    clock.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    clock.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    clock.APB1CLKDivider = RCC_HCLK_DIV2;
-    clock.APB2CLKDivider = RCC_HCLK_DIV1;
-    if (HAL_RCC_ClockConfig(&clock, FLASH_LATENCY_2) != HAL_OK) {
-        return false;
-    }
-    peripheral.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-    peripheral.AdcClockSelection = RCC_ADCPCLK2_DIV6;
-    return HAL_RCCEx_PeriphCLKConfig(&peripheral) == HAL_OK;
-}
-
-/** 配置 ADC 单次注入转换，ADC1 为双注入同步主机，ADC2 由主机触发。
- * channel 对应硬件通道 0/1；返回 HAL 初始化与校准结果；不启用转换 IRQ。 */
-static bool board_initialize_adc(ADC_HandleTypeDef *adc, ADC_TypeDef *instance, uint32_t channel)
-{
-    ADC_InjectionConfTypeDef injected = {0};
-    adc->Instance = instance;
-    adc->Init.ScanConvMode = ADC_SCAN_DISABLE;
-    adc->Init.ContinuousConvMode = DISABLE;
-    adc->Init.DiscontinuousConvMode = DISABLE;
-    adc->Init.ExternalTrigConv = ADC_SOFTWARE_START;
-    adc->Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    adc->Init.NbrOfConversion = 1u;
-    if (HAL_ADC_Init(adc) != HAL_OK) {
-        return false;
-    }
-    injected.InjectedChannel = channel;
-    injected.InjectedRank = ADC_INJECTED_RANK_1;
-    injected.InjectedNbrOfConversion = 1u;
-    injected.InjectedSamplingTime = ADC_SAMPLETIME_7CYCLES_5;
-    injected.ExternalTrigInjecConv = instance == ADC1
-        ? ADC_EXTERNALTRIGINJECCONV_T1_TRGO : ADC_INJECTED_SOFTWARE_START;
-    injected.AutoInjectedConv = DISABLE;
-    injected.InjectedDiscontinuousConvMode = DISABLE;
-    injected.InjectedOffset = 0u;
-    return HAL_ADCEx_InjectedConfigChannel(adc, &injected) == HAL_OK
-        && HAL_ADCEx_Calibration_Start(adc) == HAL_OK;
-}
-
+/** 生成初始化完成后的运行准备；不再配置时钟/引脚/ADC 通道或定时器参数。
+ * 校准是上电运行操作；清初始化 UG 的状态位再启动 TIM4 时间基准，避免伪溢出。
+ * SPI HAL_Init 不置 SPE，board 在实际 DMA 事务前启用 SPI；无 PWM 通道启动。 */
 bool board_initialize_devices(void)
 {
     board_disable_output();
-    if (!board_initialize_clock()) {
-        return false;
-    }
-    __HAL_RCC_AFIO_CLK_ENABLE();
-    __HAL_AFIO_REMAP_SWJ_NOJTAG(); /* 保留 SWD，释放 PB3；不使用 JTAG 引脚作为控制输出。 */
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_DMA1_CLK_ENABLE();
-    __HAL_RCC_ADC1_CLK_ENABLE();
-    __HAL_RCC_ADC2_CLK_ENABLE();
-    __HAL_RCC_SPI1_CLK_ENABLE();
-    __HAL_RCC_USART2_CLK_ENABLE();
-    __HAL_RCC_TIM2_CLK_ENABLE();
-    __HAL_RCC_TIM4_CLK_ENABLE();
-    GPIO_InitTypeDef pins = {0};
-    GPIOA->BSRR = GPIO_PIN_4; /* 先设置 CS 高，再改输出模式，避免伪起始帧。 */
-    pins.Pin = GPIO_PIN_4;
-    pins.Mode = GPIO_MODE_OUTPUT_PP;
-    pins.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOA, &pins);
-    pins.Pin = GPIO_PIN_0 | GPIO_PIN_1;
-    pins.Mode = GPIO_MODE_ANALOG;
-    HAL_GPIO_Init(GPIOA, &pins);
-    pins.Pin = GPIO_PIN_5 | GPIO_PIN_7 | GPIO_PIN_2;
-    pins.Mode = GPIO_MODE_AF_PP;
-    HAL_GPIO_Init(GPIOA, &pins);
-    pins.Pin = GPIO_PIN_6 | GPIO_PIN_3;
-    pins.Mode = GPIO_MODE_INPUT;
-    pins.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOA, &pins);
-    pins.Pin = GPIO_PIN_12;
-    pins.Mode = GPIO_MODE_INPUT;
-    pins.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(GPIOB, &pins); /* nFAULT 仅作低电平输入，不假称 TIM1 Break 已启用。 */
-
-    encoder_spi.Instance = SPI1;
-    encoder_spi.Init.Mode = SPI_MODE_MASTER;
-    encoder_spi.Init.Direction = SPI_DIRECTION_2LINES;
-    encoder_spi.Init.DataSize = SPI_DATASIZE_8BIT;
-    encoder_spi.Init.CLKPolarity = SPI_POLARITY_LOW;
-    encoder_spi.Init.CLKPhase = SPI_PHASE_2EDGE;
-    encoder_spi.Init.NSS = SPI_NSS_SOFT;
-    encoder_spi.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
-    encoder_spi.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    encoder_spi.Init.TIMode = SPI_TIMODE_DISABLE;
-    encoder_spi.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    encoder_spi.Init.CRCPolynomial = 7u;
-    if (HAL_SPI_Init(&encoder_spi) != HAL_OK) {
+    if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK
+        || HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK) {
         return false;
     }
     SPI1->CR1 |= SPI_CR1_SPE;
-    status_uart.Instance = USART2;
-    status_uart.Init.BaudRate = 115200u;
-    status_uart.Init.WordLength = UART_WORDLENGTH_8B;
-    status_uart.Init.StopBits = UART_STOPBITS_1;
-    status_uart.Init.Parity = UART_PARITY_NONE;
-    status_uart.Init.Mode = UART_MODE_TX;
-    status_uart.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    status_uart.Init.OverSampling = UART_OVERSAMPLING_16;
-    if (HAL_UART_Init(&status_uart) != HAL_OK) {
-        return false;
-    }
-    if (!board_initialize_adc(&adc_u, ADC1, ADC_CHANNEL_0)
-        || !board_initialize_adc(&adc_v, ADC2, ADC_CHANNEL_1)) {
-        return false;
-    }
-    ADC_MultiModeTypeDef dual_mode = {0};
-    dual_mode.Mode = ADC_DUALMODE_INJECSIMULT;
-    if (HAL_ADCEx_MultiModeConfigChannel(&adc_u, &dual_mode) != HAL_OK) {
-        return false;
-    }
-    /* 仅计数和 TRGO：不创建/启动任何 PWM 通道，也不将 PA8..10 改为 AF。 */
-    TIM1->CR1 = TIM_CR1_CMS_0 | TIM_CR1_CMS_1 | TIM_CR1_ARPE;
-    TIM1->PSC = 0u;
-    TIM1->ARR = BOARD_SAMPLE_TIMER_RELOAD;
-    TIM1->RCR = BOARD_SAMPLE_TIMER_REPEAT;
-    TIM1->EGR = TIM_EGR_UG;
-    TIM1->CR2 = TIM_CR2_MMS_1; /* MMS=010：更新事件为 TRGO。 */
     TIM1->SR = 0u;
-    TIM2->PSC = BOARD_TIMER_CLOCK_HZ / BOARD_DEVICE_TIME_HZ - 1u;
-    TIM2->ARR = 65535u;
-    TIM2->CCR1 = BOARD_ENCODER_START_DELAY_US;
-    TIM2->SMCR = TIM_SMCR_SMS_2; /* SMS=100，TS=000：由 TIM1 ITR0 重置。 */
-    TIM2->EGR = TIM_EGR_UG;
     TIM2->SR = 0u;
-    TIM4->PSC = BOARD_TIMER_CLOCK_HZ / BOARD_DEVICE_TIME_HZ - 1u;
-    TIM4->ARR = 65535u;
-    TIM4->EGR = TIM_EGR_UG;
     TIM4->SR = 0u;
+    TIM4->CNT = 0u;
     TIM4->DIER = TIM_DIER_UIE;
-    HAL_NVIC_SetPriority(TIM4_IRQn, 0u, 0u);
-    HAL_NVIC_EnableIRQ(TIM4_IRQn);
-    TIM4->CR1 = TIM_CR1_CEN;
-    HAL_NVIC_SetPriority(ADC1_2_IRQn, 0u, 0u);
-    HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 1u, 0u);
-    HAL_NVIC_SetPriority(TIM2_IRQn, 2u, 0u);
-    HAL_NVIC_SetPriority(USART2_IRQn, 3u, 0u);
+    TIM4->CR1 |= TIM_CR1_CEN;
     return true;
 }
 
 bool board_start_sampling(void)
 {
     board_disable_output();
-    if (HAL_ADCEx_InjectedStart(&adc_v) != HAL_OK
-        || HAL_ADCEx_InjectedStart_IT(&adc_u) != HAL_OK) {
+    if (HAL_ADCEx_InjectedStart(&hadc2) != HAL_OK
+        || HAL_ADCEx_InjectedStart_IT(&hadc1) != HAL_OK) {
         return false;
     }
     ADC1->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
     ADC2->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
-    HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
-    HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
-    HAL_NVIC_EnableIRQ(TIM2_IRQn);
-    HAL_NVIC_EnableIRQ(USART2_IRQn);
     TIM2->CNT = 0u;
     TIM2->DIER = TIM_DIER_CC1IE;
-    TIM2->CR1 = TIM_CR1_CEN;
+    TIM2->CR1 |= TIM_CR1_CEN;
     TIM1->CNT = 0u;
     TIM1->CR1 |= TIM_CR1_CEN;
     return true;

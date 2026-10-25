@@ -1,4 +1,4 @@
-/** 板级入口：拥有外设、DMA 私有缓冲和串口发送状态，runtime 不直接操作设备。
+/** 板级入口：使用生成的外设配置，拥有 DMA 私有缓冲和串口发送状态，runtime 不直接操作设备。
  * 主函数负责初始化/前台串口；中断负责完成帧发布。所有接口均不使能功率 PWM。 */
 #ifndef BOARD_IO_H
 #define BOARD_IO_H
@@ -13,8 +13,8 @@ void board_leave_critical(uint32_t previous_mask);
 /** 永久禁止 TIM1 MOE/CCER，PA8/9/10 保持 GPIO 低电平；启动/ISR/故障均可调用。
  * 无参数/返回；不停止采样计数器。不能关闭板卡固定接高的 EN/nSLEEP，非高阻断能。 */
 void board_disable_output(void);
-/** 前台初始化时钟、引脚、计时与采样外设，不开启采样 IRQ。
- * 返回成功与否；失败保持 PWM 禁止。仅在 HAL_Init 和 runtime_init 后调用一次。 */
+/** 生成初始化之后，前台校准 ADC、启用 SPI 和设备计时；不启动采样事件。
+ * 返回成功与否；失败保持 PWM 禁止。仅在 main 完成全部 MX_*_Init 后调用一次。 */
 bool board_initialize_devices(void);
 /** 前台启动 ADC/DMA 定时调度；仅在设备初始化成功、runtime 已 DISABLED 后调用一次。
  * 返回成功与否，失败不启动正常采样；无任何 PWM 通道启动操作。 */

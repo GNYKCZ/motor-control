@@ -11,6 +11,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import unquote
+from regenerate_m1 import GENERATED, USER
 
 
 def require(condition, message):
@@ -56,6 +57,12 @@ def main():
                         "external/missing dependency: " + name)
                 header_paths.add(path)
         print(f"PASS actual compiler dependency records: {len(header_paths)} source/header paths")
+        linked_map = (root / "build/m1/m1_sampling.map").read_text(encoding="utf-8")
+        for name in ["SystemClock_Config", "MX_GPIO_Init", "MX_DMA_Init", "MX_ADC1_Init", "MX_ADC2_Init",
+                     "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init"]:
+            require(re.search(r"^\s*" + name + r"\s+0x080[0-9a-fA-F]+\s+Thumb Code", linked_map, re.M),
+                    "generated entry missing from linked image: " + name)
+        print("PASS generated clock and all 9 peripheral entries are present in the real linked image")
     host_evidence_file = root / "build/host_m1/test_evidence.json"
     if host_evidence_file.exists():
         host_evidence = json.loads(host_evidence_file.read_text(encoding="utf-8"))
@@ -83,15 +90,24 @@ def main():
                   and "build" not in path.relative_to(firmware).parts
                   and "DebugConfig" not in path.relative_to(firmware).parts
                   and path.name not in {"system_stm32f1xx.c", "startup_stm32f103xb.s"}]
+    vendor_paths = {(firmware / item["destination"]).resolve() for item in provenance["files"]}
+    own_paths = [path for path in own_paths if path.resolve() not in vendor_paths]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
-        for number, line in enumerate(content.splitlines(), start=1):
+        # 厂家生成区保留原空白；只对 main 中自编 USER CODE 及其余自编文件检查空白。
+        generated_paths = {firmware / "Core" / name for name in GENERATED}
+        checked_content = content
+        if path in generated_paths:
+            # 其余15项完全由CubeMX生成；main的空白占位行/结束标记缩进也来自模板。
+            checked_content = "\n".join(line for m in USER.finditer(content) if m[2] != "Header"
+                                        for line in m[3].splitlines() if line.strip()) if path.name == "main.c" else ""
+        for number, line in enumerate(checked_content.splitlines(), start=1):
             require(line == line.rstrip(), f"trailing whitespace: {path.relative_to(root)}:{number}")
     print(f"PASS UTF-8/newlines/whitespace: {len(set(own_paths))} authored files")
 
     documents = [root / "README.md", root / "docs/m1_sampling_contract.md", root / "docs/m1_validation.md",
-                 firmware / "README.md", firmware / "SOURCES.md"]
+                 root / "docs/cubemx_validation.md", firmware / "README.md", firmware / "SOURCES.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")
