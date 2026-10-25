@@ -1,5 +1,13 @@
 # 来源与许可边界
 
+M2c增量：参考同一快照的adc.c轮询512次校零步骤与conf.h名义参数，独立编写
+[sensor_input](../../control_core/sensor_input.c)，没有复制作者USER CODE。
+固件和主机直接编译同一canonical测量源，不另造ADC/SPI驱动或改生成初始化。
+原理图U2/U11 INA199A1DCKR与R5/R6 20mΩ、例程3.3V/50V/V均只作名义来源，
+非本板外部电流精度标定；[详细来源/公式](../../docs/m2c_sensor_contract.md)及
+[仅采样现场计划](../../docs/m2c_sampling_check.md)区分实测与合成数据。
+M2a/M2b算法保持不变，不接入PI或使能。下面CubeMX原始文件/许可清单仍为47项。
+
 板卡/配置参考黄铮（best_pureer）的进阶工程 [stm32_foc_2](https://gitee.com/best_pureer/stm32_foc_2)，
 冻结快照 `672e32f1005d9019140d1a9c754fb8ca2e8eedde`。
 基础工程 [stm32_foc](https://gitee.com/best_pureer/stm32_foc) 只用于对照；本地副本无 Git 元数据。

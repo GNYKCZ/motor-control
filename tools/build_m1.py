@@ -73,6 +73,9 @@ def main():
                     and "build" not in path.relative_to(firmware).parts
                     and "DebugConfig" not in path.relative_to(firmware).parts
                     and path.suffix not in {".uvoptx", ".uvguix", ".bak"})
+    # 唯一共享控制核依赖：正式固件直接编译canonical测量模块，禁止复制第二份源码。
+    inputs += [root / "control_core/sensor_input.c", root / "control_core/sensor_input.h"]
+    inputs += [Path(__file__).resolve()]
     top_level = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     is_checkout = top_level.returncode == 0 and Path(top_level.stdout.strip()).resolve() == root

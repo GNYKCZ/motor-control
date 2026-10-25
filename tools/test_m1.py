@@ -1,5 +1,6 @@
 """用主机 GCC 运行实际帧/运行管理/导出模块；仅替换 board 外设，不接触硬件。"""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -15,12 +16,15 @@ def main():
     arguments = parser.parse_args()
     output = root / "build/host_m1"
     output.mkdir(parents=True, exist_ok=True)
+    previous_file = output / "test_evidence.json"
+    if previous_file.exists() and json.loads(previous_file.read_text(encoding="utf-8")).get("exit_code") != 0:
+        (output / ("failed_attempt_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json")).write_bytes(previous_file.read_bytes())
     firmware = root / "firmware/stm32f103"
     source_names = ["board/sample_frame.c", "app/motor_runtime.c", "app/telemetry.c"]
-    sources = [firmware / name for name in source_names] + [root / "tests/m1/test_sampling.c"]
+    sources = [firmware / name for name in source_names] + [root / "control_core/sensor_input.c", root / "tests/m1/test_sampling.c"]
     command = [str(arguments.gcc.resolve()), "-std=c11", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
                "-pedantic", "-I", str(firmware / "board"), "-I", str(firmware / "app"),
-               *map(str, sources), "-o", str(output / "test_sampling.exe")]
+               "-I", str(root / "control_core"), *map(str, sources), "-lm", "-o", str(output / "test_sampling.exe")]
     version = subprocess.check_output([str(arguments.gcc), "--version"], text=True)
     environment = os.environ.copy()
     environment["PATH"] = str(arguments.gcc.resolve().parent) + os.pathsep + environment.get("PATH", "")
@@ -33,6 +37,7 @@ def main():
         transcript += result.stdout
     print(transcript, end="")
     inputs = sources + list((firmware / "board").glob("*.h")) + list((firmware / "app").glob("*.h"))
+    inputs += [root / "control_core/sensor_input.h"]
     evidence = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "worktree_status": subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=root, text=True),
                 "compiler_version": version, "command": command, "exit_code": result.returncode,

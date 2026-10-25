@@ -24,7 +24,7 @@ bool board_start_sampling(void);
 uint32_t board_get_time_us(void);
 /** 前台查询串口是否仍持有上次缓冲，true 时调用者不能修改该缓冲。 */
 bool board_serial_is_busy(void);
-/** 前台提交 bytes[0..length)，长度 1..256。缓冲须持续有效且不修改直到 busy=false。
+/** 前台提交 bytes[0..length)，长度 1..BOARD_SERIAL_BUFFER_BYTES。缓冲须持续有效且不修改直到 busy=false。
  * 忙/空指针/越界返回 false；成功只启用 TXE IRQ，无轮询等待、无动态分配。 */
 bool board_start_serial_write(const char *bytes, uint32_t length);
 #endif

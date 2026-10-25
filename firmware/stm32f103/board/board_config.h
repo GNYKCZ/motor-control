@@ -10,8 +10,14 @@
 #define BOARD_SAMPLE_GAP_LIMIT_US 300u      /**< 正常约 99.94 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 1000u    /**< 首个完整有效帧最多等待 1 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 100u      /**< 前台每 100 ms 尝试导出一次，不影响 ADC 频率。 */
-#define BOARD_SERIAL_BUFFER_BYTES 256u     /**< 单行导出容量，静态分配，无动态内存。 */
+#define BOARD_SERIAL_BUFFER_BYTES 768u     /**< M2C1单行容量，最坏格式长度受检查，静态分配。 */
 #define BOARD_ADC_MAX_COUNT 4095u          /**< 12 bit ADC 原始值最大值，不代表电流已标定。 */
 #define BOARD_ENCODER_MAX_COUNT 16383u     /**< 14 bit 单圈原始计数最大值。 */
+/* 来自参考conf.h的标称参数，非本板实测；ADC满量程分母4096，非4095。
+ * INA199A1名义50 V/V、20mΩ；无独立电流基准/母线ADC，电气正方向尚未验证。 */
+#define BOARD_NOMINAL_ADC_REFERENCE_V 3.3f
+#define BOARD_NOMINAL_SHUNT_OHM 0.02f
+#define BOARD_NOMINAL_AMPLIFIER_GAIN 50.0f
+#define BOARD_NOMINAL_A_PER_COUNT (BOARD_NOMINAL_ADC_REFERENCE_V / (4096.0f * BOARD_NOMINAL_SHUNT_OHM * BOARD_NOMINAL_AMPLIFIER_GAIN))
 
 #endif

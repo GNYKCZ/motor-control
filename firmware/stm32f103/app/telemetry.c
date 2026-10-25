@@ -25,9 +25,24 @@ void telemetry_poll_status(uint32_t now_ms)
         skipped_exports++;
         return;
     }
+    /* 浮点均值/换算只在前台、临界区外进行；IRQ仅做O(1)整数统计。
+     * 未完成或中止/FAULT时数值发布为0且mv=0；零值不能冒充真实零电流。 */
+    sensor_offset_t offset = status.estimated_offset;
+    uint32_t mean_u_mc = offset.accepted_count == 0u ? 0u : offset.sum_u_count * 1000u / offset.accepted_count;
+    uint32_t mean_v_mc = offset.accepted_count == 0u ? 0u : offset.sum_v_count * 1000u / offset.accepted_count;
+    bool complete = offset.accepted_count == SENSOR_OFFSET_SAMPLE_COUNT;
+    sensor_input_t measured = {0};
+    if (complete && !status.offset_is_aborted && status.state == MOTOR_RUNTIME_DISABLED) {
+        sensor_input_config_t config = {(float)offset.sum_u_count / offset.accepted_count,
+            (float)offset.sum_v_count / offset.accepted_count, BOARD_NOMINAL_A_PER_COUNT};
+        (void)sensor_input_convert(status.sample.raw_current_u_count, status.sample.raw_current_v_count,
+            status.sample.encoder.raw_angle_count, status.sample.is_valid, config, &measured);
+    }
     /* 文本字段显式序列化，不发送 C 结构体内存布局，也不伪造物理电流/速度。 */
     int length = snprintf(serial_line, sizeof(serial_line),
-        "M1,s=%lu,f=%lu,n=%lu,t=%lu,e=%lu,es=%lu,ec=%lu,u=%u,v=%u,a=%u,mg=%u,ok=%u,bad=%lu,skip=%lu,pwm=blocked,power=unverified\r\n",
+        "M2C1,s=%lu,f=%lu,n=%lu,t=%lu,e=%lu,es=%lu,ec=%lu,u=%u,v=%u,a=%u,mg=%u,ok=%u,bad=%lu,skip=%lu,"
+        "cn=%lu,cb=%lu,ca=%u,cd=%u,cv=%u,ou_mc=%lu,ov_mc=%lu,umin=%u,umax=%u,vmin=%u,vmax=%u,"
+        "mv=%u,iu_mA=%ld,iv_mA=%ld,ma_mrad=%ld,scale_nA=%ld,pwm=blocked,power=unverified\r\n",
         (unsigned long)status.state, (unsigned long)status.fault_flags,
         (unsigned long)status.sample.sequence, (unsigned long)status.sample.current_completed_us,
         (unsigned long)status.sample.encoder.sequence,
@@ -38,7 +53,15 @@ void telemetry_poll_status(uint32_t now_ms)
         (unsigned int)status.sample.encoder.raw_angle_count,
         (unsigned int)status.sample.encoder.magnetic_status,
         status.sample.is_valid ? 1u : 0u,
-        (unsigned long)status.rejected_count, (unsigned long)skipped_exports);
+        (unsigned long)status.rejected_count, (unsigned long)skipped_exports,
+        (unsigned long)offset.accepted_count, (unsigned long)status.offset_rejected_count,
+        status.offset_is_aborted ? 1u : 0u, complete ? 1u : 0u, status.calibration_verified ? 1u : 0u,
+        (unsigned long)mean_u_mc, (unsigned long)mean_v_mc,
+        (unsigned int)offset.minimum_u_count, (unsigned int)offset.maximum_u_count,
+        (unsigned int)offset.minimum_v_count, (unsigned int)offset.maximum_v_count,
+        measured.is_valid ? 1u : 0u, (long)(measured.nominal_current_u_A * 1000.0f),
+        (long)(measured.nominal_current_v_A * 1000.0f), (long)(measured.mechanical_angle_rad * 1000.0f),
+        (long)(BOARD_NOMINAL_A_PER_COUNT * 1000000000.0f));
     if (length <= 0 || (uint32_t)length >= sizeof(serial_line)
         || !board_start_serial_write(serial_line, (uint32_t)length)) {
         skipped_exports++;

@@ -10,6 +10,16 @@ static uint32_t first_sample_time_us; /**< 首包时刻，用于启动等待界�
 static uint32_t boot_completed_us; /**< 启动握手时间，检测完全没有 ADC 事件的情况。 */
 static bool has_received_sample; /**< 是否收到过完整包；不能用会回绕的统计计数判断首次。 */
 
+/** 持有runtime临界区时中止未完成候选；不清已有证据，不因后续好帧自动复位。 */
+static void motor_runtime_stop_offset(bool rejected_frame)
+{
+    if (!runtime_status.offset_is_aborted
+        && runtime_status.estimated_offset.accepted_count < SENSOR_OFFSET_SAMPLE_COUNT) {
+        runtime_status.offset_is_aborted = true;
+        if (rejected_frame) { runtime_status.offset_rejected_count++; }
+    }
+}
+
 void motor_runtime_init(void)
 {
     board_disable_output();
@@ -34,6 +44,7 @@ void motor_runtime_finish_boot(bool devices_are_ready)
     } else {
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_INITIALIZATION;
+        motor_runtime_stop_offset(false);
     }
     board_leave_critical(previous_mask);
 }
@@ -44,6 +55,7 @@ void motor_runtime_latch_fault(motor_fault_t fault)
     uint32_t previous_mask = board_enter_critical();
     runtime_status.fault_flags |= (uint32_t)fault;
     runtime_status.state = MOTOR_RUNTIME_FAULT;
+    motor_runtime_stop_offset(false);
     board_leave_critical(previous_mask);
 }
 
@@ -55,6 +67,7 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
         runtime_status.rejected_count++;
+        motor_runtime_stop_offset(true);
         board_leave_critical(previous_mask);
         return;
     }
@@ -62,6 +75,11 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         sample->current_completed_us, sample->raw_current_u_count,
         sample->raw_current_v_count, &sample->encoder);
     bool is_valid = checked_sample.is_valid && sample->is_valid;
+    /* 候选批比M1“序号更新”更严格：两种完成序号必须逐一连续，模回绕允许。
+     * 跳号包仍按原M1契约判断raw有效，但不得用于补齐零偏候选。 */
+    bool offset_is_continuous = !has_received_sample
+        || ((uint32_t)(sample->sequence - runtime_status.sample.sequence) == 1u
+            && (uint32_t)(sample->encoder.sequence - runtime_status.sample.encoder.sequence) == 1u);
     if (!runtime_status.has_valid_sample
         && sample->current_completed_us - boot_completed_us > BOARD_BOOT_SAMPLE_LIMIT_US) {
         runtime_status.state = MOTOR_RUNTIME_FAULT;
@@ -85,7 +103,17 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
     runtime_status.sample_count++;
     if (is_valid) {
         runtime_status.has_valid_sample = true;
+        if (!offset_is_continuous) { motor_runtime_stop_offset(true); }
+        if (runtime_status.state == MOTOR_RUNTIME_DISABLED && !runtime_status.offset_is_aborted
+            && runtime_status.estimated_offset.accepted_count < SENSOR_OFFSET_SAMPLE_COUNT
+            && !sensor_offset_add(&runtime_status.estimated_offset, sample->raw_current_u_count,
+                sample->raw_current_v_count, true)) {
+            motor_runtime_stop_offset(true);
+            runtime_status.state = MOTOR_RUNTIME_FAULT;
+            runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
+        }
     } else {
+        motor_runtime_stop_offset(true);
         runtime_status.rejected_count++;
         if (runtime_status.has_valid_sample
             || sample->current_completed_us - first_sample_time_us >= BOARD_BOOT_SAMPLE_LIMIT_US) {
@@ -123,6 +151,7 @@ void motor_runtime_check_deadline(uint32_t now_us)
         board_disable_output();
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
+        motor_runtime_stop_offset(false);
     }
     board_leave_critical(previous_mask);
 }

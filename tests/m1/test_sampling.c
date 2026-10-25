@@ -16,7 +16,7 @@ static uint32_t disable_count;        /**< 禁止调制接口调用次数。 */
 static uint32_t device_now_us;        /**< 手工设备时间。 */
 static bool serial_busy;              /**< 手工串口拥塞条件。 */
 static const char *borrowed_line;     /**< 验证忙期间缓冲内容不变。 */
-static char captured_line[256];       /**< 最近成功发送的副本。 */
+static char captured_line[BOARD_SERIAL_BUFFER_BYTES]; /**< 最近成功发送的副本。 */
 static motor_sample_t pending_sample; /**< 中断屏蔽期间等待发布的下一完整包。 */
 static bool has_pending_sample;       /**< 解除屏蔽时触发一次模拟 ADC 完成。 */
 
@@ -243,6 +243,8 @@ static void test_snapshot_interleaving(void)
     assert(old.sample.raw_current_u_count == 1234u && old.sample.encoder.sequence == 1u);
     assert(current.sample.sequence == 2u && current.sample.current_completed_us == 200u);
     assert(current.sample.raw_current_u_count == 3333u && current.sample.encoder.sequence == 2u);
+    assert(old.estimated_offset.accepted_count==1u && old.estimated_offset.sum_u_count==1234u);
+    assert(current.estimated_offset.accepted_count==2u && current.estimated_offset.sum_u_count==4567u);
     interrupt_mask = 1u;
     (void)read_status();
     assert(interrupt_mask == 1u);
@@ -262,10 +264,10 @@ static void test_telemetry(void)
     assert(!serial_busy);
     telemetry_poll_status(100u);
     assert(serial_busy);
-    assert(strstr(captured_line, "M1,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,") == captured_line);
+    assert(strstr(captured_line, "M2C1,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,") == captured_line);
     assert(strstr(captured_line, "u=1234,v=2345,a=123,mg=0,ok=1,bad=0,skip=0,") != NULL);
     assert(strstr(captured_line, "pwm=blocked,power=unverified\r\n") != NULL);
-    char saved_line[256];
+    char saved_line[BOARD_SERIAL_BUFFER_BYTES];
     strcpy(saved_line, borrowed_line);
     for (uint32_t time_ms = 200u; time_ms <= 1000u; time_ms += 100u) {
         telemetry_poll_status(time_ms);
@@ -282,6 +284,60 @@ static void test_telemetry(void)
     puts("PASS telemetry: exact device fields, congestion skip, buffer ownership, time wrap");
 }
 
+/** 真实runtime连续512帧统计；异常不补数，FAULT/满批冻结，前台只发布名义量。 */
+static void test_offset_candidates(void)
+{
+    start_runtime();
+    for(uint32_t i=0;i<512u;++i){
+        motor_sample_t sample=make_sample(i+1u,(i+1u)*100u);
+        sample.raw_current_u_count=(uint16_t)(2000u+i);
+        sample.raw_current_v_count=(uint16_t)(3000u-i);
+        motor_runtime_handle_sample(&sample);
+    }
+    motor_status_t status=read_status();
+    assert(status.state==MOTOR_RUNTIME_DISABLED && !status.calibration_verified && !status.offset_is_aborted);
+    assert(status.estimated_offset.accepted_count==512u);
+    assert(status.estimated_offset.sum_u_count==1154816u && status.estimated_offset.sum_v_count==1405184u);
+    assert(status.estimated_offset.minimum_u_count==2000u && status.estimated_offset.maximum_u_count==2511u);
+    sensor_offset_t complete=status.estimated_offset;
+    motor_sample_t after=make_sample(513u,51300u);motor_runtime_handle_sample(&after);
+    status=read_status();assert(memcmp(&status.estimated_offset,&complete,sizeof(complete))==0);
+    serial_busy=false;telemetry_poll_status(1000u);
+    assert(strstr(captured_line,"cn=512,cb=0,ca=0,cd=1,cv=0,ou_mc=2255500,ov_mc=2744500,")!=NULL);
+    assert(strstr(captured_line,"mv=1,iu_mA=-822,iv_mA=-321,ma_mrad=196,scale_nA=805664,")!=NULL);
+    // 行为新格式保持原字段含义，且单行最坏数字容量仍小于静态借用缓冲。
+    assert(strlen(captured_line)<BOARD_SERIAL_BUFFER_BYTES);
+    for(unsigned condition=0;condition<5;++condition){
+        start_runtime();motor_sample_t first=make_sample(1u,100u);motor_runtime_handle_sample(&first);
+        sensor_offset_t partial=read_status().estimated_offset;
+        motor_sample_t bad=make_sample(2u,200u);
+        if(condition==0)bad.is_valid=false;
+        if(condition==1)bad.sequence=1u;
+        if(condition==2)bad.current_completed_us=401u;
+        if(condition==3)motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+        if(condition==4)motor_runtime_check_deadline(401u);
+        if(condition<3)motor_runtime_handle_sample(&bad);
+        motor_sample_t good=make_sample(3u,500u);motor_runtime_handle_sample(&good);
+        status=read_status();assert(status.offset_is_aborted && status.estimated_offset.accepted_count==1u);
+        assert(memcmp(&status.estimated_offset,&partial,sizeof(partial))==0);
+        assert(!status.calibration_verified && status.state==MOTOR_RUNTIME_FAULT);
+        serial_busy=false;telemetry_poll_status(2000u+condition*100u);assert(strstr(captured_line,"mv=0,iu_mA=0,iv_mA=0,ma_mrad=0,")!=NULL);
+    }
+    start_runtime();motor_sample_t invalid=make_sample(1u,100u);invalid.is_valid=false;
+    motor_runtime_handle_sample(&invalid);motor_sample_t good=make_sample(2u,200u);motor_runtime_handle_sample(&good);
+    status=read_status();assert(status.state==MOTOR_RUNTIME_DISABLED && status.offset_is_aborted);
+    assert(status.estimated_offset.accepted_count==0 && status.offset_rejected_count==1);
+    for(unsigned jump=0;jump<2;++jump){
+        start_runtime();motor_sample_t first=make_sample(1u,100u);motor_runtime_handle_sample(&first);
+        motor_sample_t missing=make_sample(3u,200u);
+        if(jump==0)missing.encoder.sequence=2u;else missing.sequence=2u;
+        motor_runtime_handle_sample(&missing);status=read_status();
+        assert(status.state==MOTOR_RUNTIME_DISABLED && status.sample.is_valid);
+        assert(status.offset_is_aborted && status.offset_rejected_count==1 && status.estimated_offset.accepted_count==1);
+    }
+    puts("PASS M2c runtime: continuous 512 candidates, freeze on invalid/duplicate/time/fault, no verified calibration, nominal telemetry");
+}
+
 /** 主机入口；断言失败立即非零退出，全部通过才打印最终结果。 */
 int main(void)
 {
@@ -290,6 +346,7 @@ int main(void)
     test_runtime_states();
     test_snapshot_interleaving();
     test_telemetry();
+    test_offset_candidates();
     puts("PASS all M1 host software checks (hardware NOT RUN)");
     return 0;
 }
