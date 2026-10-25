@@ -2,6 +2,8 @@
 
 设计：Issue #7 v1.1，第 8、9、12 节；Refs #1。起始 main 为
 `b4de4abd03d46ee88897db950447290a5e6fd8b6`。本批仅为 P0a，不包含电流闭环、运动模式和硬件运行。
+初始化所有权按 [v1.4 修正](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393651536)
+更新如下；原采样、状态和输出边界契约保持不变。
 
 ## 用户确认的输出边界
 
@@ -14,10 +16,10 @@ MCU PA8/9/10 仅连接 IN1/2/3。软件永久禁止 TIM1 通道和 MOE，并把�
 
 ## 本批文件与来源决策
 
-- `firmware/stm32f103/Core/`：自编最小入口和中断路由；保留 Cube/MDK 目录习惯。
-- `board/board_io.[ch]`：自编引脚、HAL 初始化、原始 ADC/DMA、计时及串口适配。
+- `firmware/stm32f103/Core/`：CubeMX生成外设/时钟/MSP及main结构；main USER CODE与Cortex中断路由自编。
+- `board/board_io.[ch]`：自编校准/事件启动、门控、原始ADC/DMA、计时及串口事务，不再复制外设参数初始化。
 - `board/sample_frame.[ch]`：自编 MT6701 协议验证、完整采样包和时间边界，供主机测试使用。
-- `board/board_config.h`：本批唯一硬件/时间参数来源。
+- `m1_sampling.ioc`：外设引脚/时钟/定时器参数来源；`board/board_config.h`：软件时间上限/计数范围/缓冲容量。
 - `app/motor_runtime.[ch]`：只实现 BOOT、DISABLED、FAULT，永无 RUNNING/对齐入口。
 - `app/telemetry.[ch]`：前台格式化，串口中断逐字节发送；忙时跳过状态且计数。
 - `Drivers/`、启动文件：仅引入具组件许可的必要 ST HAL/CMSIS 文件，逐文件记录 SHA256。
