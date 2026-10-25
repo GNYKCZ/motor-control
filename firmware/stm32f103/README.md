@@ -23,6 +23,31 @@ PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的
 7. [telemetry.c](app/telemetry.c)：前台如何导出、串口忙时如何跳过而不拖住采样。
 8. [测试](../../tests/m1/test_sampling.c)、[来源清单](SOURCES.md) 和 [验证记录](../../docs/m1_validation.md)。
 
+## 从现有例程找到本项目对应代码
+
+**本批直接复用了 39 个厂家文件；应用层和采样适配是参考例程配置/数据流后自编的，
+作者的 FOC、PI 包装和模式代码尚未迁入。** “参考已有例程”不等于“所有文件原样复制”。
+下面左侧路径以进阶例程 `stm32_foc_2` 为根，右侧链接以本工程为根；基础例程用于对照学习。
+这是 [Issue #7 的 v1.2 来源说明补充](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393305178)，
+本次只补文档，M1 的只采样行为与验收范围不变。
+
+| 原例程入口 | 本项目对应入口 | 处理方式与学习重点 |
+|---|---|---|
+| `stm32_foc_test.ioc` | [board_config.h](board/board_config.h)、[board_io.c](board/board_io.c) | **参考配置，原文件未引入**：沿用芯片、引脚与采样信号链；没有可直接再生成本工程的 `.ioc` |
+| `Core/Src/main.c` | [main.c](Core/Src/main.c)、[motor_runtime.c](app/motor_runtime.c) | **参考改写，自编适配**：将原来的自动 PWM/对齐/默认电流启动，改为先建状态、只启动采样、保持 DISABLED |
+| `Core/Src/adc.c` | [board_io.c](board/board_io.c)、[sample_frame.c](board/sample_frame.c) | **参考改写，自编适配**：双 ADC 完成才发布原始值；旧回调里的 FOC/电流环不进入 M1 |
+| `Core/Src/spi.c` | [board_io.c](board/board_io.c)、[sample_frame.c](board/sample_frame.c) | **参考改写，自编适配**：保留 SPI/DMA 读取思路，分开发送/接收缓冲，增加完成检查、CRC、序号与读取时间区间 |
+| `Core/Src/tim.c` | [board_config.h](board/board_config.h)、[board_io.c](board/board_io.c) | **参考配置后改写**：保留 TIM1→双 ADC、TIM2 延时读角度、TIM4 计时；读取时点和计时分频的变化见下文时间表；不保留 TIM3 多处修改控制状态的路径 |
+| `Core/Src/usart.c` | [telemetry.c](app/telemetry.c)、[board_io.c](board/board_io.c) | **参考配置后改写**：沿用 USART2 引脚/波特率；原阻塞 `fputc` 改为前台格式化、TXE/TC 中断发送 |
+| `Drivers/motor/foc.c`、`foc.h` 及控制参数/查表 | **M1 暂未引入**；未来控制核位置见 [SOURCES.md](SOURCES.md) | 当前无控制环调用者，作者自定义源码公开再发布许可尚未明确；不能把可运行参考工程冒称本仓库已移植 FOC |
+| HAL/CMSIS、ST 系统和启动模板 | [Drivers/](Drivers/)、[system_stm32f1xx.c](Core/Src/system_stm32f1xx.c)、[startup](MDK-ARM/startup_stm32f103xb.s) | **直接原样复用**：39 个必要厂家文件逐项保留原字节、许可与署名，见 [准确来源/哈希清单](vendor_sources.json) |
+| `MDK-ARM/stm32_foc_test.uvprojx` | [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)、[project_sources.json](project_sources.json) | **保留工程形态，重建源清单**：沿用 ARM Compiler/O2 约束，原项目文件未直接复制 |
+
+逐项的保留行为、改动原因、许可边界和 **M2 优先复用的前置条件**见 [来源说明](SOURCES.md)。
+后续会优先核查例程已有的 `foc_forward`、Clarke/Park、SVPWM 与电流控制路径，
+取得明确许可后才按最小调用链提取；不从空白重造整套算法，也不先建立无人调用的控制目录。
+这块板本身可以输出 PWM；当前 M1 不输出 PWM 是本批软件选择，不能误读为板卡不能驱动电机。
+
 ## 实际调用链与状态所有权
 
 ```text
