@@ -25,9 +25,11 @@ def main():
     root = Path(__file__).resolve().parents[1]
     firmware = root / "firmware/stm32f103"
     project = json.loads((firmware / "project_sources.json").read_text(encoding="utf-8"))
+    shared_files = {root / "control_core/sensor_input.c", root / "control_core/sensor_input.h"}
     for relative in project["sources"] + project["includes"] + [project["startup"], project["scatter"]]:
         path = (firmware / relative).resolve()
-        require(path.is_relative_to(firmware) and path.exists(), "missing/outside source: " + relative)
+        require((path.is_relative_to(firmware) or path in shared_files or path == root / "control_core")
+                and path.exists(), "missing/outside source: " + relative)
     source_names = [Path(name).stem for name in project["sources"]]
     require(len(source_names) == len(set(source_names)), "object filename collision")
     document = ET.parse(firmware / "MDK-ARM/m1_sampling.uvprojx")
@@ -37,7 +39,7 @@ def main():
     require(document.findtext(".//OutputName") == "m1_sampling", "MDK output name mismatch")
     require(document.findtext(".//LDads/ScatterFile") == "m1_sampling.sct", "MDK scatter mismatch")
     subprocess.run([sys.executable, str(root / "tools/generate_m1_mdk.py"), "--check"], check=True)
-    print(f"PASS source closure: {len(source_names)} C files + startup, all under firmware")
+    print(f"PASS source closure: {len(source_names)} C files + startup, firmware plus canonical sensor_input")
     dependency_files = list((root / "build/m1").glob("*.d"))
     if dependency_files:
         require(len(dependency_files) == len(source_names), "incomplete dependency evidence; rebuild target")
@@ -53,16 +55,17 @@ def main():
                 if not name:
                     continue
                 path = Path(name).resolve()
-                require(path.exists() and (path.is_relative_to(firmware) or path.is_relative_to(compiler_headers)),
+                require(path.exists() and (path.is_relative_to(firmware) or path in shared_files or path.is_relative_to(compiler_headers)),
                         "external/missing dependency: " + name)
                 header_paths.add(path)
         print(f"PASS actual compiler dependency records: {len(header_paths)} source/header paths")
         linked_map = (root / "build/m1/m1_sampling.map").read_text(encoding="utf-8")
         for name in ["SystemClock_Config", "MX_GPIO_Init", "MX_DMA_Init", "MX_ADC1_Init", "MX_ADC2_Init",
-                     "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init"]:
+                     "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init",
+                     "sensor_input_convert", "sensor_offset_add"]:
             require(re.search(r"^\s*" + name + r"\s+0x080[0-9a-fA-F]+\s+Thumb Code", linked_map, re.M),
                     "generated entry missing from linked image: " + name)
-        print("PASS generated clock and all 9 peripheral entries are present in the real linked image")
+        print("PASS generated clock, all 9 peripheral entries and both canonical sensor entries are linked")
     host_evidence_file = root / "build/host_m1/test_evidence.json"
     if host_evidence_file.exists():
         host_evidence = json.loads(host_evidence_file.read_text(encoding="utf-8"))
@@ -73,6 +76,14 @@ def main():
         require(host_evidence.get("test_script_sha256") == hashlib.sha256((root / "tools/test_m1.py").read_bytes()).hexdigest(),
                 "host test script changed after test")
         print("PASS current host-test source/header/script hashes match the saved PASS")
+    sensor_evidence_file = root / "build/host_sensor_input/test_evidence.json"
+    if sensor_evidence_file.exists():
+        sensor_evidence = json.loads(sensor_evidence_file.read_text(encoding="utf-8"))
+        require(sensor_evidence["result"] == "PASS", "latest sensor/capture software test did not pass")
+        for name, expected_hash in sensor_evidence["input_sha256"].items():
+            require(hashlib.sha256((root / name).read_bytes()).hexdigest() == expected_hash,
+                    "sensor/capture test input changed: " + name)
+        print("PASS current sensor/capture test source, script, fixture and document hashes")
 
     provenance = json.loads((firmware / "vendor_sources.json").read_text(encoding="utf-8"))
     for record in provenance["files"]:
@@ -92,6 +103,9 @@ def main():
                   and path.name not in {"system_stm32f1xx.c", "startup_stm32f103xb.s"}]
     vendor_paths = {(firmware / item["destination"]).resolve() for item in provenance["files"]}
     own_paths = [path for path in own_paths if path.resolve() not in vendor_paths]
+    own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
+    own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
+                  "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -107,7 +121,8 @@ def main():
     print(f"PASS UTF-8/newlines/whitespace: {len(set(own_paths))} authored files")
 
     documents = [root / "README.md", root / "docs/m1_sampling_contract.md", root / "docs/m1_validation.md",
-                 root / "docs/cubemx_validation.md", firmware / "README.md", firmware / "SOURCES.md"]
+                 root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
+                 root / "docs/m2c_sampling_check.md", firmware / "README.md", firmware / "SOURCES.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

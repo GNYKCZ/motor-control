@@ -10,7 +10,8 @@
     "Drivers/STM32F1xx_HAL_Driver/Inc",
     "Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
     "Drivers/CMSIS/Include",
-    "Drivers/CMSIS/Device/ST/STM32F1xx/Include"
+    "Drivers/CMSIS/Device/ST/STM32F1xx/Include",
+    "../../control_core"
   ],
   "sources": [
     "Core/Src/main.c",
@@ -38,7 +39,8 @@
     "Core/Src/usart.c",
     "Core/Src/stm32f1xx_hal_msp.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim.c",
-    "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c"
+    "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c",
+    "../../control_core/sensor_input.c"
   ],
   "startup": "MDK-ARM/startup_stm32f103xb.s",
   "scatter": "MDK-ARM/m1_sampling.sct"

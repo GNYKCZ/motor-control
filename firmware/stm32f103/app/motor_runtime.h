@@ -4,6 +4,7 @@
 #ifndef MOTOR_RUNTIME_H
 #define MOTOR_RUNTIME_H
 #include "sample_frame.h"
+#include "sensor_input.h"
 
 typedef enum {
     MOTOR_RUNTIME_BOOT = 0,     /**< 尚未确认外设初始化完成，禁止 PWM。 */
@@ -26,6 +27,10 @@ typedef struct {
     motor_sample_t sample;       /**< 最近一次收到的完整包；无效时也保留原始证据。 */
     bool has_valid_sample;      /**< 本次启动以来是否至少收到一个有效包。 */
     bool pwm_is_permanently_blocked; /**< 本批恒 true；不宣称功率桥高阻关闭。 */
+    sensor_offset_t estimated_offset; /**< DISABLED中完整连续帧的零偏候选整数统计。 */
+    uint32_t offset_rejected_count; /**< 候选批被首个无效帧中止的次数，最多1；完整拒收总数仍见rejected_count。 */
+    bool offset_is_aborted;     /**< 任一无效/重复/时序错误/故障会冻结未完成批次，不补数。 */
+    bool calibration_verified;  /**< 本批恒false；收齐512帧不证明静止、无电流或换算精度。 */
 } motor_status_t;
 
 /** 前台首次初始化；归零状态，先禁止 PWM，再建立 BOOT；不得在采样启动后重入。 */

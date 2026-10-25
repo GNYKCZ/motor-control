@@ -1,0 +1,2 @@
+M2C1,s=1,f=0,n=513,t=51300,e=513,es=51250,ec=51272,u=1234,v=2345,a=513,mg=0,ok=1,bad=0,skip=0,cn=512,cb=0,ca=0,cd=1,cv=0,ou_mc=2255500,ov_mc=2744500,umin=2000,umax=2511,vmin=2489,vmax=3000,mv=1,iu_mA=-822,iv_mA=-321,ma_mrad=196,scale_nA=805664,pwm=blocked,power=unverified
+M2C1,s=2,f=2,n=514,t=51400,e=514,es=51350,ec=51372,u=65535,v=2345,a=514,mg=0,ok=0,bad=1,skip=1,cn=1,cb=1,ca=1,cd=0,cv=0,ou_mc=2000000,ov_mc=3000000,umin=2000,umax=2000,vmin=3000,vmax=3000,mv=0,iu_mA=0,iv_mA=0,ma_mrad=0,scale_nA=805664,pwm=blocked,power=unverified

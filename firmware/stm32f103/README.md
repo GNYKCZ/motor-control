@@ -10,6 +10,11 @@ PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的
 对 DRV8313 来说，这会保持低侧导通制动，而非让电机三相高阻悬空；实际 U4 型号还需看板。
 本轮没有烧录、上电、启动电机，不能据代码或构建宣称真实电气保护有效。
 
+M2c 已在同一固件增加 [名义测量与零偏候选](../../docs/m2c_sensor_contract.md)。
+runtime从DISABLED连续完整帧累计512次整数统计；异常冻结，不补数，不自动校准通过。
+前台快照后才换算名义A/机械单圈rad，输出改为显式版本M2C1，旧raw字段含义保持。
+格式、误差/来源与保存命令见该契约；[现场步骤](../../docs/m2c_sampling_check.md)尚未执行。
+
 ## 从哪里开始阅读
 
 按下面顺序读，自编函数和字段均有中文说明；厂家代码维持原署名与命名，避免改名后难以查手册。
@@ -20,7 +25,7 @@ PA8/9/10 固定为普通 GPIO 低电平，不配置成定时器复用；TIM1 的
 4. [sample_frame.h](board/sample_frame.h) 和 [sample_frame.c](board/sample_frame.c)：原始数值含义、完整帧、CRC 和时间规则。
 5. [motor_runtime.h](app/motor_runtime.h) 和 [motor_runtime.c](app/motor_runtime.c)：谁拥有状态，什么时候进入 FAULT。
 6. [board_io.h](board/board_io.h) 和 [board_io.c](board/board_io.c)：原理图引脚→外设→完成事件；这里才访问硬件。
-7. [telemetry.c](app/telemetry.c)：前台如何导出、串口忙时如何跳过而不拖住采样。
+7. [telemetry.c](app/telemetry.c) 与 [sensor_input](../../control_core/sensor_input.h)：前台名义测量/导出、串口忙时跳过。
 8. [测试](../../tests/m1/test_sampling.c)、[来源清单](SOURCES.md) 和 [验证记录](../../docs/m1_validation.md)。
 
 ## 从现有例程找到本项目对应代码
@@ -82,6 +87,8 @@ telemetry 拥有导出行缓冲。没有可被前台逐字段改写的控制上�
 
 ## 一个最小数据例子
 
+以下M1例子说明保留字段的意义；当前完整输出前缀已为M2C1，新增统计/名义量字段见M2c契约。
+
 假设双 ADC 完成时设备计数为 1000 us，采样序号为 123：
 
 ```text
@@ -100,8 +107,8 @@ CRC 合格；传输22 us <=40 us；从开始到 ADC 完成50 us <=200 us
 它们构成传输区间，不是传感器内部精确采样时刻。考虑手册 <5 us 内部延迟、SPI 传输和 IRQ
 延迟后，物理角度年龄还需实测/进一步界定。本批不使用角度做实时换相。
 
-串口是 115200、8N1、只有 TX，默认每 100 ms 尝试导出。固定标记 `M1` 表示此格式；
-`s` 为 0=BOOT/1=DISABLED/2=FAULT，`f` 为故障位（1初始化、2采样、4设备），
+串口是 115200、8N1、只有 TX，默认每 100 ms 尝试导出。当前格式固定标记为 `M2C1`；
+旧M1字段在M2C1中保留：`s` 为 0=BOOT/1=DISABLED/2=FAULT，`f` 为故障位（1初始化、2采样、4设备），
 `n/e` 分别是 ADC/编码器序号，`u/v/a/mg` 为原始值，`ok` 表示包有效性，
 `bad` 是拒绝计数，`skip` 是导出跳过次数。`power=unverified` 永久提醒本批没有断能证据。
 序号、时间和统计值均允许 32 bit 模回绕。UART 忙时不重写在途缓冲，直接跳过一次并计数；
@@ -152,10 +159,11 @@ python tools/verify_m1.py
 MDK 用户可打开 [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)，选择 `m1_sampling` 后只 Build：
 
 ```powershell
-& 'D:\Keil_v5\UV4\UV4.exe' -r firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx -t m1_sampling -o "$PWD\build\m1\mdk_build.log"
+& 'D:\Keil_v5\UV4\UV4.exe' -r firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx -t m1_sampling -j0 -sg -o "$PWD\build\m1\mdk_build.log"
 ```
 
 MDK 在本机返回后需核对日志里的 `0 Error(s)` 与实际产物，GUI 程序启动成功不等于构建成功。
+应等待本次日志出现Build Time Elapsed，并检查文件更新时间与当前源；可能异步启动时不要读旧日志当作通过。
 MDK 项目由显式源清单生成；CubeMX 负责初始化源码，两者交付同一套固件，见 [来源说明](SOURCES.md)。
 此处所有命令只构建/运行主机测试，不执行下载和调试。
 
