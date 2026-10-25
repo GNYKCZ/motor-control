@@ -159,7 +159,7 @@ python tools/verify_m1.py
 MDK 用户可打开 [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)，选择 `m1_sampling` 后只 Build：
 
 ```powershell
-& 'D:\Keil_v5\UV4\UV4.exe' -r firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx -t m1_sampling -j0 -sg -o "$PWD\build\m1\mdk_build.log"
+& 'D:\Keil_v5\UV4\UV4.exe' -r firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx -t m1_sampling -j0 -o "$PWD\build\m1\mdk_build.log"
 ```
 
 MDK 在本机返回后需核对日志里的 `0 Error(s)` 与实际产物，GUI 程序启动成功不等于构建成功。
