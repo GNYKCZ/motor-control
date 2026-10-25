@@ -1,1 +1,7 @@
 * text=auto eol=lf
+
+# 厂家来源以原始字节记录 SHA256：禁止换行转换，保留其既有空白与版权文本。
+# 仅对原样引入的厂家文件关闭空白诊断；自编代码仍使用上面的 LF 规则。
+firmware/stm32f103/Drivers/** -text -whitespace
+firmware/stm32f103/Core/Src/system_stm32f1xx.c -text -whitespace
+firmware/stm32f103/MDK-ARM/startup_stm32f103xb.s -text -whitespace

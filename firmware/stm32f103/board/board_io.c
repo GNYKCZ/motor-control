@@ -1,0 +1,393 @@
+/** STM32F103C8 板级适配：拥有外设句柄、DMA 缓冲、设备时间和 UART 借用状态。
+ * 完成事件进入 runtime；SPI 接收缓冲永不直接向前台公开，前台只读 runtime 快照。
+ * M1 仅采样。PA8/9/10 固定 GPIO 低，绝不配置为 PWM AF；无法控制驱动 EN/nSLEEP。 */
+#include "board_io.h"
+#include "board_config.h"
+#include "sample_frame.h"
+#include "motor_runtime.h"
+#include "main.h"
+#include <stddef.h>
+
+static ADC_HandleTypeDef adc_u;          /**< ADC1/PA0，board 独占。 */
+static ADC_HandleTypeDef adc_v;          /**< ADC2/PA1，board 独占。 */
+static SPI_HandleTypeDef encoder_spi;   /**< SPI1，仅用于初始化；运行用有界 DMA 事件。 */
+static UART_HandleTypeDef status_uart;  /**< USART2，仅用于初始化；发送用 TXE/TC IRQ。 */
+static volatile uint8_t encoder_receive_bytes[3];/**< DMA 写入的硬件内存；volatile 强制实际读取，不承担帧一致性。 */
+static const uint8_t encoder_clock_bytes[3] = {0u, 0u, 0u}; /**< 仅用于产生 24 个时钟。 */
+static board_encoder_frame_t completed_encoder; /**< 只在 RX TC 之后整体替换。 */
+static uint32_t encoder_sequence;       /**< DMA 完成序号，校验失败也递增。 */
+static uint32_t sample_sequence;        /**< 完整双 ADC 序号。 */
+static uint32_t encoder_started_us;     /**< 当前 DMA 的 CS 下降沿附近设备时间。 */
+static volatile bool encoder_is_busy;   /**< TIM2 开始，RX TC/异常结束；短临界区保护。 */
+static volatile uint32_t device_time_high_us; /**< TIM4 溢出的高位，模 2^32。 */
+static volatile bool serial_is_busy;   /**< UART 在发送及末字节移出前均为 true。 */
+static const char *serial_bytes;       /**< 借用前台静态缓冲，发送期间不许重写。 */
+static uint32_t serial_length;         /**< 当前发送的总字节数。 */
+static uint32_t serial_position;       /**< 下个送入 DR 的字节位置。 */
+
+uint32_t board_enter_critical(void)
+{
+    uint32_t previous_mask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    return previous_mask;
+}
+
+void board_leave_critical(uint32_t previous_mask)
+{
+    __DMB();
+    __set_PRIMASK(previous_mask);
+}
+
+void board_disable_output(void)
+{
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    TIM1->BDTR &= ~TIM_BDTR_MOE;
+    TIM1->CCER = 0u;
+    GPIOA->BRR = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
+    /* 三个引脚必须始终是普通推挽低电平，不能因 MOE 清零而留下悬空驱动 IN。
+     * CRH 低 12 bit 分别对应 PA8..10，0x2 表示 2 MHz 通用推挽输出。
+     * 这相当于低侧制动，不是高阻断能；不在任何地方配置 AF 或启动 PWM 通道。 */
+    GPIOA->CRH = (GPIOA->CRH & ~0xfffu) | 0x222u;
+}
+
+uint32_t board_get_time_us(void)
+{
+    uint32_t previous_mask = board_enter_critical();
+    uint32_t high_us = device_time_high_us;
+    uint32_t low_us = TIM4->CNT;
+    if ((TIM4->SR & TIM_SR_UIF) != 0u) {
+        /* 溢出 IRQ 尚未处理时补一次高位；不清 UIF，交给唯一 IRQ 写入者处理。
+         * 需要 IRQ 最长屏蔽小于 65.536 ms；本批不宣称已测得实时预算。 */
+        high_us += 65536u;
+        low_us = TIM4->CNT;
+    }
+    board_leave_critical(previous_mask);
+    return high_us + low_us;
+}
+
+/** 配置 8 MHz HSE→72 MHz，APB1=36 MHz（定时器倍频到72），ADC=12 MHz。
+ * 前台唯一调用；HAL 初始化的超时只出现在启动阶段，不在采样 IRQ 内等待。 */
+static bool board_initialize_clock(void)
+{
+    RCC_OscInitTypeDef oscillator = {0};
+    RCC_ClkInitTypeDef clock = {0};
+    RCC_PeriphCLKInitTypeDef peripheral = {0};
+    oscillator.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    oscillator.HSEState = RCC_HSE_ON;
+    oscillator.HSIState = RCC_HSI_ON;
+    oscillator.PLL.PLLState = RCC_PLL_ON;
+    oscillator.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    oscillator.PLL.PLLMUL = RCC_PLL_MUL9;
+    if (HAL_RCC_OscConfig(&oscillator) != HAL_OK) {
+        return false;
+    }
+    clock.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    clock.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    clock.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    clock.APB1CLKDivider = RCC_HCLK_DIV2;
+    clock.APB2CLKDivider = RCC_HCLK_DIV1;
+    if (HAL_RCC_ClockConfig(&clock, FLASH_LATENCY_2) != HAL_OK) {
+        return false;
+    }
+    peripheral.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+    peripheral.AdcClockSelection = RCC_ADCPCLK2_DIV6;
+    return HAL_RCCEx_PeriphCLKConfig(&peripheral) == HAL_OK;
+}
+
+/** 配置 ADC 单次注入转换，ADC1 为双注入同步主机，ADC2 由主机触发。
+ * channel 对应硬件通道 0/1；返回 HAL 初始化与校准结果；不启用转换 IRQ。 */
+static bool board_initialize_adc(ADC_HandleTypeDef *adc, ADC_TypeDef *instance, uint32_t channel)
+{
+    ADC_InjectionConfTypeDef injected = {0};
+    adc->Instance = instance;
+    adc->Init.ScanConvMode = ADC_SCAN_DISABLE;
+    adc->Init.ContinuousConvMode = DISABLE;
+    adc->Init.DiscontinuousConvMode = DISABLE;
+    adc->Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    adc->Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    adc->Init.NbrOfConversion = 1u;
+    if (HAL_ADC_Init(adc) != HAL_OK) {
+        return false;
+    }
+    injected.InjectedChannel = channel;
+    injected.InjectedRank = ADC_INJECTED_RANK_1;
+    injected.InjectedNbrOfConversion = 1u;
+    injected.InjectedSamplingTime = ADC_SAMPLETIME_7CYCLES_5;
+    injected.ExternalTrigInjecConv = instance == ADC1
+        ? ADC_EXTERNALTRIGINJECCONV_T1_TRGO : ADC_INJECTED_SOFTWARE_START;
+    injected.AutoInjectedConv = DISABLE;
+    injected.InjectedDiscontinuousConvMode = DISABLE;
+    injected.InjectedOffset = 0u;
+    return HAL_ADCEx_InjectedConfigChannel(adc, &injected) == HAL_OK
+        && HAL_ADCEx_Calibration_Start(adc) == HAL_OK;
+}
+
+bool board_initialize_devices(void)
+{
+    board_disable_output();
+    if (!board_initialize_clock()) {
+        return false;
+    }
+    __HAL_RCC_AFIO_CLK_ENABLE();
+    __HAL_AFIO_REMAP_SWJ_NOJTAG(); /* 保留 SWD，释放 PB3；不使用 JTAG 引脚作为控制输出。 */
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_DMA1_CLK_ENABLE();
+    __HAL_RCC_ADC1_CLK_ENABLE();
+    __HAL_RCC_ADC2_CLK_ENABLE();
+    __HAL_RCC_SPI1_CLK_ENABLE();
+    __HAL_RCC_USART2_CLK_ENABLE();
+    __HAL_RCC_TIM2_CLK_ENABLE();
+    __HAL_RCC_TIM4_CLK_ENABLE();
+    GPIO_InitTypeDef pins = {0};
+    GPIOA->BSRR = GPIO_PIN_4; /* 先设置 CS 高，再改输出模式，避免伪起始帧。 */
+    pins.Pin = GPIO_PIN_4;
+    pins.Mode = GPIO_MODE_OUTPUT_PP;
+    pins.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &pins);
+    pins.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+    pins.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(GPIOA, &pins);
+    pins.Pin = GPIO_PIN_5 | GPIO_PIN_7 | GPIO_PIN_2;
+    pins.Mode = GPIO_MODE_AF_PP;
+    HAL_GPIO_Init(GPIOA, &pins);
+    pins.Pin = GPIO_PIN_6 | GPIO_PIN_3;
+    pins.Mode = GPIO_MODE_INPUT;
+    pins.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &pins);
+    pins.Pin = GPIO_PIN_12;
+    pins.Mode = GPIO_MODE_INPUT;
+    pins.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOB, &pins); /* nFAULT 仅作低电平输入，不假称 TIM1 Break 已启用。 */
+
+    encoder_spi.Instance = SPI1;
+    encoder_spi.Init.Mode = SPI_MODE_MASTER;
+    encoder_spi.Init.Direction = SPI_DIRECTION_2LINES;
+    encoder_spi.Init.DataSize = SPI_DATASIZE_8BIT;
+    encoder_spi.Init.CLKPolarity = SPI_POLARITY_LOW;
+    encoder_spi.Init.CLKPhase = SPI_PHASE_2EDGE;
+    encoder_spi.Init.NSS = SPI_NSS_SOFT;
+    encoder_spi.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
+    encoder_spi.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    encoder_spi.Init.TIMode = SPI_TIMODE_DISABLE;
+    encoder_spi.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    encoder_spi.Init.CRCPolynomial = 7u;
+    if (HAL_SPI_Init(&encoder_spi) != HAL_OK) {
+        return false;
+    }
+    SPI1->CR1 |= SPI_CR1_SPE;
+    status_uart.Instance = USART2;
+    status_uart.Init.BaudRate = 115200u;
+    status_uart.Init.WordLength = UART_WORDLENGTH_8B;
+    status_uart.Init.StopBits = UART_STOPBITS_1;
+    status_uart.Init.Parity = UART_PARITY_NONE;
+    status_uart.Init.Mode = UART_MODE_TX;
+    status_uart.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    status_uart.Init.OverSampling = UART_OVERSAMPLING_16;
+    if (HAL_UART_Init(&status_uart) != HAL_OK) {
+        return false;
+    }
+    if (!board_initialize_adc(&adc_u, ADC1, ADC_CHANNEL_0)
+        || !board_initialize_adc(&adc_v, ADC2, ADC_CHANNEL_1)) {
+        return false;
+    }
+    ADC_MultiModeTypeDef dual_mode = {0};
+    dual_mode.Mode = ADC_DUALMODE_INJECSIMULT;
+    if (HAL_ADCEx_MultiModeConfigChannel(&adc_u, &dual_mode) != HAL_OK) {
+        return false;
+    }
+    /* 仅计数和 TRGO：不创建/启动任何 PWM 通道，也不将 PA8..10 改为 AF。 */
+    TIM1->CR1 = TIM_CR1_CMS_0 | TIM_CR1_CMS_1 | TIM_CR1_ARPE;
+    TIM1->PSC = 0u;
+    TIM1->ARR = BOARD_SAMPLE_TIMER_RELOAD;
+    TIM1->RCR = BOARD_SAMPLE_TIMER_REPEAT;
+    TIM1->EGR = TIM_EGR_UG;
+    TIM1->CR2 = TIM_CR2_MMS_1; /* MMS=010：更新事件为 TRGO。 */
+    TIM1->SR = 0u;
+    TIM2->PSC = BOARD_TIMER_CLOCK_HZ / BOARD_DEVICE_TIME_HZ - 1u;
+    TIM2->ARR = 65535u;
+    TIM2->CCR1 = BOARD_ENCODER_START_DELAY_US;
+    TIM2->SMCR = TIM_SMCR_SMS_2; /* SMS=100，TS=000：由 TIM1 ITR0 重置。 */
+    TIM2->EGR = TIM_EGR_UG;
+    TIM2->SR = 0u;
+    TIM4->PSC = BOARD_TIMER_CLOCK_HZ / BOARD_DEVICE_TIME_HZ - 1u;
+    TIM4->ARR = 65535u;
+    TIM4->EGR = TIM_EGR_UG;
+    TIM4->SR = 0u;
+    TIM4->DIER = TIM_DIER_UIE;
+    HAL_NVIC_SetPriority(TIM4_IRQn, 0u, 0u);
+    HAL_NVIC_EnableIRQ(TIM4_IRQn);
+    TIM4->CR1 = TIM_CR1_CEN;
+    HAL_NVIC_SetPriority(ADC1_2_IRQn, 0u, 0u);
+    HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 1u, 0u);
+    HAL_NVIC_SetPriority(TIM2_IRQn, 2u, 0u);
+    HAL_NVIC_SetPriority(USART2_IRQn, 3u, 0u);
+    return true;
+}
+
+bool board_start_sampling(void)
+{
+    board_disable_output();
+    if (HAL_ADCEx_InjectedStart(&adc_v) != HAL_OK
+        || HAL_ADCEx_InjectedStart_IT(&adc_u) != HAL_OK) {
+        return false;
+    }
+    ADC1->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
+    ADC2->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
+    HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
+    HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
+    HAL_NVIC_EnableIRQ(TIM2_IRQn);
+    HAL_NVIC_EnableIRQ(USART2_IRQn);
+    TIM2->CNT = 0u;
+    TIM2->DIER = TIM_DIER_CC1IE;
+    TIM2->CR1 = TIM_CR1_CEN;
+    TIM1->CNT = 0u;
+    TIM1->CR1 |= TIM_CR1_CEN;
+    return true;
+}
+
+/** TIM2 比较事件启动一帧；忙/异常不等待、不覆写半帧，锁存故障。
+ * 短临界区防止 ADC 读取 completed_encoder 时被发布打断；DMA 私有缓冲无读者。 */
+static void board_start_encoder_read(void)
+{
+    uint32_t previous_mask = board_enter_critical();
+    if (encoder_is_busy) {
+        motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+        board_leave_critical(previous_mask);
+        return;
+    }
+    encoder_is_busy = true;
+    SPI1->CR2 &= ~(SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN);
+    DMA1_Channel2->CCR = 0u;
+    DMA1_Channel3->CCR = 0u;
+    DMA1->IFCR = DMA_IFCR_CGIF2 | DMA_IFCR_CGIF3;
+    DMA1_Channel2->CPAR = (uint32_t)&SPI1->DR;
+    DMA1_Channel2->CMAR = (uint32_t)encoder_receive_bytes;
+    DMA1_Channel2->CNDTR = 3u;
+    DMA1_Channel2->CCR = DMA_CCR_MINC | DMA_CCR_TCIE | DMA_CCR_TEIE;
+    DMA1_Channel3->CPAR = (uint32_t)&SPI1->DR;
+    DMA1_Channel3->CMAR = (uint32_t)encoder_clock_bytes;
+    DMA1_Channel3->CNDTR = 3u;
+    DMA1_Channel3->CCR = DMA_CCR_MINC | DMA_CCR_DIR;
+    encoder_started_us = board_get_time_us();
+    GPIOA->BRR = GPIO_PIN_4;
+    DMA1_Channel2->CCR |= DMA_CCR_EN;
+    DMA1_Channel3->CCR |= DMA_CCR_EN;
+    __DMB();
+    SPI1->CR2 |= SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
+    board_leave_critical(previous_mask);
+}
+
+/** SPI RX DMA 完成：仅处理 TC/TE，拒绝半帧；无 BSY 轮询或 HAL 超时等待。
+ * 关闭 DMA 后再解析；CS 在下个 ADC 事件（距完成有余量）拉高，满足 SSI 尾保持。
+ * ADC 的高优先级可能先于本 IRQ，此时只能看到上一完整帧并按序号/年龄拒绝。 */
+void DMA1_Channel2_IRQHandler(void)
+{
+    uint32_t flags = DMA1->ISR;
+    if ((flags & (DMA_ISR_TCIF2 | DMA_ISR_TEIF2)) == 0u) {
+        return;
+    }
+    uint32_t previous_mask = board_enter_critical();
+    SPI1->CR2 &= ~(SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN);
+    DMA1_Channel2->CCR &= ~DMA_CCR_EN;
+    DMA1_Channel3->CCR &= ~DMA_CCR_EN;
+    bool is_complete = encoder_is_busy && (flags & DMA_ISR_TCIF2) != 0u
+        && (flags & DMA_ISR_TEIF2) == 0u && (DMA1->ISR & DMA_ISR_TEIF3) == 0u
+        && DMA1_Channel2->CNDTR == 0u && (SPI1->SR & (SPI_SR_BSY | SPI_SR_OVR | SPI_SR_MODF)) == 0u;
+    DMA1->IFCR = DMA_IFCR_CGIF2 | DMA_IFCR_CGIF3;
+    encoder_sequence++;
+    __DMB();
+    /* 完成事件+关闭 DMA+临界区负责一致性；volatile 只保证读取硬件刚写入的字节。 */
+    uint8_t finished_bytes[3] = {encoder_receive_bytes[0], encoder_receive_bytes[1], encoder_receive_bytes[2]};
+    completed_encoder = board_decode_encoder_frame(finished_bytes,
+        is_complete ? 3u : 0u, encoder_sequence, encoder_started_us, board_get_time_us());
+    encoder_is_busy = false;
+    if (!is_complete) {
+        motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+    }
+    board_leave_critical(previous_mask);
+}
+
+/** 双 ADC IRQ：两个 JEOC 都存在才读取 JDR1 并发布一个完整包。
+ * 只调用有界整数校验/runtime；不做 FOC，不格式化、不发送、不等待另一路 ADC。 */
+void ADC1_2_IRQHandler(void)
+{
+    bool both_are_complete = (ADC1->SR & ADC_SR_JEOC) != 0u && (ADC2->SR & ADC_SR_JEOC) != 0u;
+    uint32_t completed_us = board_get_time_us();
+    ADC1->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
+    ADC2->SR = ~(ADC_SR_JEOC | ADC_SR_JSTRT);
+    if (!both_are_complete) {
+        motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+        return;
+    }
+    GPIOA->BSRR = GPIO_PIN_4;
+    if ((GPIOB->IDR & GPIO_PIN_12) == 0u) {
+        motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+    }
+    /* DMA 发布也持同一临界区；复制完成对象，不接触正由 DMA 改写的三字节缓冲。 */
+    uint32_t previous_mask = board_enter_critical();
+    board_encoder_frame_t encoder = completed_encoder;
+    board_leave_critical(previous_mask);
+    sample_sequence++;
+    motor_sample_t sample = board_make_sample(sample_sequence, completed_us,
+        (uint16_t)ADC1->JDR1, (uint16_t)ADC2->JDR1, &encoder);
+    motor_runtime_handle_sample(&sample);
+}
+
+/** TIM2 每个 TRGO 周期仅在 CCR1 到达时启动一次 SSI；清标志后执行有界启动。 */
+void TIM2_IRQHandler(void)
+{
+    if ((TIM2->SR & TIM_SR_CC1IF) != 0u) {
+        TIM2->SR = ~TIM_SR_CC1IF;
+        board_start_encoder_read();
+    }
+}
+
+/** TIM4 每 65.536 ms 扩展微秒计数；与读取时的 UIF 补偿配合，不改采样时间。 */
+void TIM4_IRQHandler(void)
+{
+    if ((TIM4->SR & TIM_SR_UIF) != 0u) {
+        TIM4->SR = ~TIM_SR_UIF;
+        device_time_high_us += 65536u;
+    }
+}
+
+bool board_serial_is_busy(void)
+{
+    return serial_is_busy;
+}
+
+bool board_start_serial_write(const char *bytes, uint32_t length)
+{
+    if (bytes == NULL || length == 0u || length > BOARD_SERIAL_BUFFER_BYTES) {
+        return false;
+    }
+    uint32_t previous_mask = board_enter_critical();
+    if (serial_is_busy) {
+        board_leave_critical(previous_mask);
+        return false;
+    }
+    serial_bytes = bytes;
+    serial_length = length;
+    serial_position = 0u;
+    serial_is_busy = true;
+    USART2->CR1 |= USART_CR1_TXEIE;
+    board_leave_critical(previous_mask);
+    return true;
+}
+
+/** UART 每次 IRQ 最多交付一个字节；末字节 TC 后才释放缓冲，永不阻塞 ADC。 */
+void USART2_IRQHandler(void)
+{
+    if ((USART2->CR1 & USART_CR1_TXEIE) != 0u && (USART2->SR & USART_SR_TXE) != 0u) {
+        USART2->DR = (uint8_t)serial_bytes[serial_position++];
+        if (serial_position == serial_length) {
+            USART2->CR1 = (USART2->CR1 & ~USART_CR1_TXEIE) | USART_CR1_TCIE;
+        }
+    } else if ((USART2->CR1 & USART_CR1_TCIE) != 0u && (USART2->SR & USART_SR_TC) != 0u) {
+        USART2->CR1 &= ~USART_CR1_TCIE;
+        serial_is_busy = false;
+    }
+}
