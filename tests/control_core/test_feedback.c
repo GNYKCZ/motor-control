@@ -1,3 +1,5 @@
+/* 主机独立验收：从整数真值构造帧，由本进程串行调用feedback；不连接固件/硬件。
+ * 测试自身持有全部夹具与计数，输出断言及合成CSV供runner保存，禁止用DUT生成期望。 */
 #include "feedback.h"
 
 #include <limits.h>
@@ -8,22 +10,27 @@
 
 /* 独立高精度单位；期望从预生成展开整数真值及时间计算，不调用DUT回绕逻辑。 */
 #define RAD (6.2831853071795864769252867665590057683943388L / 16384.0L)
-static unsigned checks;
+static unsigned checks; /* 本测试进程累计执行的断言数，不属于被测模块状态。 */
+/* 检查失败即打印位置并非零退出；不使用可被NDEBUG删除的assert。 */
 #define CHECK(c) do { checks++; if (!(c)) { \
     fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); exit(1); } } while (0)
 
+/* 按实施前固定的2e-12相对/绝对容差比较独立高精度期望，拒绝非有限结果。 */
 static void near_value(double actual, long double expected)
 {
     CHECK(isfinite(actual));
     CHECK(fabsl((long double)actual - expected) <= 2e-12L * fmaxl(1.0L, fabsl(expected)));
 }
 
+/* 构造测试配置：窗口n点、方向±1；固定速度/读取/间隔上限不是板端推荐参数。 */
 static feedback_config_t config(unsigned n, int direction)
 {
     feedback_config_t c = {20.0, 100000u, 40u, (uint8_t)n, (int8_t)direction};
     return c;
 }
 
+/* 从展开整数真值truth生成raw；seq为完成序号，midpoint单位us。
+ * 固定读取区间21us，使奇数时长向下取整后正好回到给定中点。 */
 static feedback_sample_t sample(int64_t truth, uint32_t seq, uint32_t midpoint)
 {
     int64_t raw = truth % 16384;
@@ -40,6 +47,7 @@ static feedback_sample_t sample(int64_t truth, uint32_t seq, uint32_t midpoint)
     return s;
 }
 
+/* 验证指定帧失败、整个状态对象字节不变且结果全零；不会替换真实step路径。 */
 static void rejected(feedback_state_t *state, feedback_sample_t s)
 {
     unsigned char before[sizeof(*state)];
@@ -109,6 +117,7 @@ static void trajectories(void)
     puts("PASS independent trajectories: wraps, signs, sparse/static, jitter, windows 2/9/32");
 }
 
+/* 覆盖无效配置/帧、时间/序号、速度量化与别名边界及reset/NULL生命周期。 */
 static void failures(void)
 {
     feedback_state_t state;
@@ -232,6 +241,7 @@ static void overflow(void)
     puts("PASS signed count and unsigned elapsed overflow; transactional state unchanged");
 }
 
+/* 以静止轨迹验证跨窗累计时间>2^32，并验证0/16383相邻计数正反跨圈。 */
 static void long_time_and_exact_wraps(void)
 {
     feedback_state_t state;
@@ -259,6 +269,7 @@ static void long_time_and_exact_wraps(void)
     puts("PASS exact adjacent raw wraps and window elapsed beyond uint32 period");
 }
 
+/* 两套独立配置先各自运行再交错运行，比对值输出，查找意外共享可变状态。 */
 static void isolation(void)
 {
     feedback_state_t isolated[2], interleaved[2];
@@ -282,9 +293,11 @@ static void isolation(void)
     puts("PASS two independently configured instances interleaved");
 }
 
+/* 同一预定轨迹同时评价两种速度；独立真值生成稀疏/周期噪声/阶跃工况，
+ * 保留所有样本输出，固定120点统计区间，报告RMS与完全响应拍号。 */
 static void comparison(void)
 {
-    static const int noise[8] = {0, 1, 0, -1, 0, 1, 0, -1};
+    static const int noise[8] = {0, 1, 0, -1, 0, 1, 0, -1}; /* 预定8拍周期计数误差，仅合成对照。 */
     unsigned trajectory, i;
     for (trajectory = 0; trajectory < 3; trajectory++) {
         feedback_state_t state;
@@ -342,6 +355,7 @@ static void comparison(void)
     puts("PASS synthetic quantization/noise/step comparison against independent oracle");
 }
 
+/* 按组执行完整主机验收，全部通过才返回0，打印总断言数供证据核对。 */
 int main(void)
 {
     trajectories(); failures(); overflow(); long_time_and_exact_wraps(); isolation(); comparison();
