@@ -3,7 +3,8 @@
 #ifndef TELEMETRY_H
 #define TELEMETRY_H
 #include <stdint.h>
-/** 前台以 HAL 毫秒计数调用，内部每 100 ms 尝试一次。
+/** 前台以HAL毫秒计数调用，每100ms开始一行，之后每次只格式化一个小段。
+ * 0准备、1..13输出；调用间必须返回主循环服务feedback，同行只读冻结快照。
  * 无返回；串口忙则只增加跳过计数，绝不等待，不修改 runtime/采样状态。
  * 毫秒计数允许一次回绕，调用间隔须小于 2^31 ms。 */
 void telemetry_poll_status(uint32_t now_ms);

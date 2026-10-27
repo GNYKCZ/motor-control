@@ -10,7 +10,7 @@
 #define BOARD_SAMPLE_GAP_LIMIT_US 300u      /**< 正常约 99.94 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 1000u    /**< 首个完整有效帧最多等待 1 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 100u      /**< 前台每 100 ms 尝试导出一次，不影响 ADC 频率。 */
-#define BOARD_SERIAL_BUFFER_BYTES 1024u    /**< M3B1单行容量，最坏格式长度受检查，静态分配。 */
+#define BOARD_SERIAL_BUFFER_BYTES 1536u    /**< M3B2增加有限观测计时，仍小于capture单行2048B上限。 */
 #define BOARD_FEEDBACK_DIVIDER 10u         /**< 每10个完整有效原始帧交接一次，非严格1kHz调度保证。 */
 #define BOARD_FEEDBACK_GAP_LIMIT_US 3000u  /**< 抽帧实际中点间隔上限，不能覆盖原始流失帧。 */
 #define BOARD_FEEDBACK_MAX_SPEED_RAD_S 100.0 /**< 仅估算先验：约955rpm，非实测速度保护。 */

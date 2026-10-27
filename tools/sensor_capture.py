@@ -1,4 +1,4 @@
-"""保存M3B1/M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
+"""保存M3B2/M3B1/M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
 
 --input只处理文件；--port需另装pyserial3.5并由现场明确安排后执行。
 输出为新建目录，绝不覆盖旧采集；元数据由现场填写，不能据软件自动确认实测/校准。
@@ -16,6 +16,7 @@ import time
 RAW_KEYS = "s f n t e es ec u v a mg ok bad skip pwm power".split()
 SENSOR_KEYS = "cn cb ca cd cv ou_mc ov_mc umin umax vmin vmax mv iu_mA iv_mA ma_mrad scale_nA".split()
 FEEDBACK_KEYS = "fp fd fw ff fe ft fr fm fdt fn fc fa_mrad vd_mrad_s vw_mrad_s wd_count wdt_us fo fs dir dir_ok".split()
+TIMING_KEYS = "fb_poll_us fb_step_us mb_wait_us mb_max_us mb_overrun_us".split() + [f"tp{i}_us" for i in range(14)]
 
 
 def parse_line(raw):
@@ -25,7 +26,7 @@ def parse_line(raw):
     text = raw[:-1].removesuffix(b"\r").decode("ascii")
     pieces = text.split(",")
     version = pieces[0]
-    if version not in {"M1", "M2C1", "M3B1"}:
+    if version not in {"M1", "M2C1", "M3B1", "M3B2"}:
         raise ValueError("unknown format version")
     fields = {}
     for piece in pieces[1:]:
@@ -39,7 +40,8 @@ def parse_line(raw):
                 raise ValueError("not an integer: " + key)
             fields[key] = int(value)
     expected = set(RAW_KEYS + (SENSOR_KEYS if version != "M1" else [])
-                   + (FEEDBACK_KEYS if version == "M3B1" else []))
+                   + (FEEDBACK_KEYS if version in {"M3B1", "M3B2"} else [])
+                   + (TIMING_KEYS if version == "M3B2" else []))
     if set(fields) != expected or fields["pwm"] != "blocked" or fields["power"] != "unverified":
         raise ValueError("field set or output boundary mismatch")
     for key, value in fields.items():
@@ -75,7 +77,7 @@ def parse_line(raw):
             raise ValueError("measurement validity contradicts snapshot")
         if not fields["mv"] and any(fields[k] != 0 for k in ("iu_mA","iv_mA","ma_mrad")):
             raise ValueError("invalid measurement carries numeric result")
-    if version == "M3B1":
+    if version in {"M3B1", "M3B2"}:
         if any(fields[k] > 1 for k in ("fp", "fd", "fw", "ff")) or fields["dir_ok"] != 0:
             raise ValueError("feedback flags or direction verification invalid")
         if fields["fs"] != 10 or fields["dir"] != 1 or fields["fn"] > 9 or fields["fr"] > 16383:
@@ -99,6 +101,9 @@ def parse_line(raw):
             raise ValueError("window interval missing")
         if not fields["fw"] and any(fields[k] for k in ("vw_mrad_s", "wd_count", "wdt_us")):
             raise ValueError("invalid window carries numeric result")
+    if version == "M3B2":
+        if fields["mb_wait_us"] > fields["mb_max_us"] or fields["fb_step_us"] > fields["fb_poll_us"]:
+            raise ValueError("timing maximum contradicts observation")
     return {"format": version, **fields}
 
 
