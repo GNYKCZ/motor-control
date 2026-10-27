@@ -40,7 +40,8 @@
     "Core/Src/stm32f1xx_hal_msp.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_tim_ex.c",
-    "../../control_core/sensor_input.c"
+    "../../control_core/sensor_input.c",
+    "../../control_core/feedback.c"
   ],
   "startup": "MDK-ARM/startup_stm32f103xb.s",
   "scatter": "MDK-ARM/m1_sampling.sct"

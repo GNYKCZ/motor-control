@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 import subprocess
+from sensor_capture import parse_line
 from pathlib import Path
 
 
@@ -21,8 +23,9 @@ def main():
         (output / ("failed_attempt_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json")).write_bytes(previous_file.read_bytes())
     firmware = root / "firmware/stm32f103"
     source_names = ["board/sample_frame.c", "app/motor_runtime.c", "app/telemetry.c"]
-    sources = [firmware / name for name in source_names] + [root / "control_core/sensor_input.c", root / "tests/m1/test_sampling.c"]
-    command = [str(arguments.gcc.resolve()), "-std=c11", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+    sources = [firmware / name for name in source_names] + [root / "control_core/sensor_input.c", root / "control_core/feedback.c", root / "tests/m1/test_sampling.c"]
+    # MinGW默认旧MSVCRT格式器不支持C99 %lld，使用其标准C格式器以匹配目标微库。
+    command = [str(arguments.gcc.resolve()), "-std=c11", "-D__USE_MINGW_ANSI_STDIO=1", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
                "-pedantic", "-I", str(firmware / "board"), "-I", str(firmware / "app"),
                "-I", str(root / "control_core"), *map(str, sources), "-lm", "-o", str(output / "test_sampling.exe")]
     version = subprocess.check_output([str(arguments.gcc), "--version"], text=True)
@@ -35,9 +38,30 @@ def main():
         result = subprocess.run([str(output / "test_sampling.exe")], text=True, env=environment, timeout=60,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         transcript += result.stdout
+        if result.returncode == 0:
+            # 同一真实runtime/telemetry文本直接交真实capture；三行含首帧、直接速度、满窗。
+            parsed = [parse_line((line + "\n").encode("ascii")) for line in result.stdout.splitlines()
+                      if line.startswith("M3B1,")]
+            if len(parsed) != 3 or [p["fc"] for p in parsed] != [0, 10, 80] or not parsed[-1]["fw"]:
+                raise RuntimeError("runtime -> telemetry -> capture integration mismatch")
+            transcript += "PASS M3b real runtime -> telemetry -> capture: first/direct/window records\n"
     print(transcript, end="")
+    # 独立上界：将实际C格式串的每个转换替换为其整数类型最长十进制表示。
+    # 包含符号与CRLF，预留结尾NUL；不靠本次正常小数值行长度推断最坏容量。
+    source = (firmware / "app/telemetry.c").read_text(encoding="utf-8")
+    format_block = source.split("int length = snprintf", 1)[1].split("(unsigned long)status.state", 1)[0]
+    format_text = "".join(json.loads('"' + part + '"') for part in re.findall(r'"([^"\n]*)"', format_block))
+    widths = {"%llu": 20, "%lld": 20, "%lu": 10, "%ld": 11, "%u": 10}
+    longest = re.sub(r"%llu|%lld|%lu|%ld|%u", lambda match: "9" * widths[match[0]], format_text)
+    capacity = int(re.search(r"#define BOARD_SERIAL_BUFFER_BYTES (\d+)u",
+                            (firmware / "board/board_config.h").read_text(encoding="utf-8"))[1])
+    if "%" in longest or len(longest) + 1 > capacity:
+        raise RuntimeError("telemetry worst-case integer length exceeds static buffer")
+    transcript += f"PASS M3b format bound: {len(longest)} bytes + NUL <= {capacity}\n"
+    print(transcript.splitlines()[-1])
     inputs = sources + list((firmware / "board").glob("*.h")) + list((firmware / "app").glob("*.h"))
-    inputs += [root / "control_core/sensor_input.h"]
+    inputs += [root / "control_core/sensor_input.h", root / "control_core/feedback.h"]
+    inputs += [root / "tools/sensor_capture.py"]
     evidence = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "worktree_status": subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=root, text=True),
                 "compiler_version": version, "command": command, "exit_code": result.returncode,

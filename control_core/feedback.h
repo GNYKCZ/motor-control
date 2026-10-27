@@ -1,9 +1,9 @@
 #ifndef CONTROL_CORE_FEEDBACK_H
 #define CONTROL_CORE_FEEDBACK_H
 
-/* 主机反馈模块：接收调用者提供的完整编码器帧，输出机械角和两种速度供离线比较。
+/* 反馈模块：接收调用者提供的完整编码器帧，输出机械角和两种速度。
  * 不读取外设、不驱动输出、不拥有全局状态；每个调用者持有独立配置/状态/结果对象。
- * 当前由主机测试串行调用；同一状态不可并发访问，未验收在MCU中断内的执行时间。
+ * 由主机或MCU前台串行调用；同一状态不可并发访问，未验收MCU执行时间。
  * 调用顺序：init -> step逐帧处理；失败由调用者故障处理或reset后重新建立原点。
  * 公共契约在此集中说明；合成实验及来源对应见docs/m3a_feedback_contract.md。 */
 #include <stdbool.h>
@@ -25,7 +25,7 @@ typedef struct {
  * 调用者负责提供一致快照；本模块只保存所需值，不保留输入指针。 */
 typedef struct {
     uint16_t raw_angle_count;     /* 未定机械方向/电零位的14 bit原始角计数[0,16383]。 */
-    uint32_t sequence;            /* 编码器完成序号；首帧任意，其后必须模2^32严格加1。 */
+    uint32_t sequence;            /* 编码器完成序号；首帧任意，其后必须模2^32严格增加init固定步长（默认1）。 */
     uint32_t read_started_us;     /* 本帧读取开始的1MHz设备时间，uint32模2^32回绕。 */
     uint32_t read_completed_us;   /* 本帧读取结束时间，同一设备时钟；不是精确传感器采样沿。 */
     bool is_valid;               /* 调用者对完整帧的有效性判定；false拒绝，true仍需通过模块边界检查。 */
@@ -42,6 +42,7 @@ typedef struct {
  * step只有成功才写状态，失败时包括填充字节在内保持对象表示不变。 */
 typedef struct {
     feedback_config_t config;    /* init复制的有效配置；更改参数须重新init。 */
+    uint32_t sequence_step;       /* init固定的真实完成序号步长；普通逐帧为1，不能运行中修改。 */
     feedback_point_t history[FEEDBACK_CAPACITY]; /* 成功帧环形历史，仅使用前window_samples个槽。 */
     int64_t continuous_count;    /* 当前相对首帧的有向累计计数；首帧为0，溢出前拒绝新帧。 */
     uint64_t elapsed_us;         /* 成功帧中点间隔的累计us；首帧为0，溢出前拒绝新帧。 */
@@ -78,6 +79,13 @@ typedef struct {
  * state为NULL或配置无效返回false且不修改状态。无外设/分配副作用。 */
 bool feedback_init(feedback_state_t *state, feedback_config_t config);
 
+/* 显式等间隔抽帧初始化：sequence_step范围[1,2^31-1]，输入仍传真实完成序号。
+ * 调用者必须另行逐帧核验原始流完整，不能用抽帧掩盖丢失/无效原始帧。
+ * 时间/速度/半圈歧义仍按真实读取时标检查，不能按计划周期替换实际dt。
+ * 默认init等价于step=1；reset保留该步长，变更必须重新init并重建相对原点。 */
+bool feedback_init_spaced(feedback_state_t *state, feedback_config_t config,
+                          uint32_t sequence_step);
+
 /* 显式复位：state必须曾成功init且配置未被篡改；true时保留配置并清空轨迹，
  * 下一成功帧重新设相对原点0。NULL/无效配置返回false，非NULL状态不变。 */
 bool feedback_reset(feedback_state_t *state);
@@ -85,7 +93,8 @@ bool feedback_reset(feedback_state_t *state);
 /* 处理一个完整帧：state须已成功init且由当前调用独占；sample是输入值副本，
  * result为调用者可写输出对象，与state不可重叠；同一状态不得并发调用。
  * 读取duration=(end-start)模2^32须<=maximum_read_us，允许0；中点向下取整us。
- * 后续序号严格加1，读取区间不可重叠（端点相接允许），中点dt在[1,maximum_gap_us]。
+ * 后续真实序号严格增加init固定的sequence_step（默认1），读取区间不可重叠，
+ * 端点相接允许，中点dt在[1,maximum_gap_us]。
  * 调用者保证真实读取时长/相邻间隔<2^31 us；模时间不能检测完整时钟周期丢失。
  * raw模差取(-8192,8192)；半圈拒绝。B=max_speed_rad_s×dt_us/1e6÷(2π/16384)，
  * abs(raw模差)<=B+1才接受；B+1>=8192整拍不可辨而拒绝。+1是量化包络，
@@ -93,7 +102,7 @@ bool feedback_reset(feedback_state_t *state);
  * true时提交状态和结果；首帧仅建立位置原点，窗口满window_samples点后才有窗口速度。
  * false时state任何字节不变，非NULL result全零；NULL result也不提交state。
  * 失败原因包括上述边界、无效帧/配置/指针、累计整数溢出；调用方须故障处理或显式reset，
- * 不应跳过坏帧后假装序列连续。无外设/打印/分配副作用，仅提供主机软件证据。 */
+ * 不应跳过坏帧后假装序列连续。无外设/打印/分配副作用；部署实时性由调用方另行验证。 */
 bool feedback_step(feedback_state_t *state, feedback_sample_t sample,
                    feedback_result_t *result);
 

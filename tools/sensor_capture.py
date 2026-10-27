@@ -1,4 +1,4 @@
-"""保存M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
+"""保存M3B1/M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
 
 --input只处理文件；--port需另装pyserial3.5并由现场明确安排后执行。
 输出为新建目录，绝不覆盖旧采集；元数据由现场填写，不能据软件自动确认实测/校准。
@@ -15,6 +15,7 @@ import time
 
 RAW_KEYS = "s f n t e es ec u v a mg ok bad skip pwm power".split()
 SENSOR_KEYS = "cn cb ca cd cv ou_mc ov_mc umin umax vmin vmax mv iu_mA iv_mA ma_mrad scale_nA".split()
+FEEDBACK_KEYS = "fp fd fw ff fe ft fr fm fdt fn fc fa_mrad vd_mrad_s vw_mrad_s wd_count wdt_us fo fs dir dir_ok".split()
 
 
 def parse_line(raw):
@@ -24,7 +25,7 @@ def parse_line(raw):
     text = raw[:-1].removesuffix(b"\r").decode("ascii")
     pieces = text.split(",")
     version = pieces[0]
-    if version not in {"M1", "M2C1"}:
+    if version not in {"M1", "M2C1", "M3B1"}:
         raise ValueError("unknown format version")
     fields = {}
     for piece in pieces[1:]:
@@ -37,13 +38,20 @@ def parse_line(raw):
             if re.fullmatch(r"-?[0-9]+", value) is None:
                 raise ValueError("not an integer: " + key)
             fields[key] = int(value)
-    expected = set(RAW_KEYS + (SENSOR_KEYS if version == "M2C1" else []))
+    expected = set(RAW_KEYS + (SENSOR_KEYS if version != "M1" else [])
+                   + (FEEDBACK_KEYS if version == "M3B1" else []))
     if set(fields) != expected or fields["pwm"] != "blocked" or fields["power"] != "unverified":
         raise ValueError("field set or output boundary mismatch")
     for key, value in fields.items():
         if key in {"pwm", "power"}:
             continue
-        if key in {"iu_mA", "iv_mA"}:
+        if key in {"fc", "fa_mrad", "wd_count"}:
+            if not -(2**63) <= value < 2**63:
+                raise ValueError("signed 64-bit field out of range")
+        elif key == "wdt_us":
+            if not 0 <= value < 2**64:
+                raise ValueError("unsigned 64-bit field out of range")
+        elif key in {"iu_mA", "iv_mA", "vd_mrad_s", "vw_mrad_s", "dir"}:
             if not -(2**31) <= value < 2**31:
                 raise ValueError("signed field out of range")
         elif not 0 <= value < 2**32:
@@ -54,7 +62,7 @@ def parse_line(raw):
         raise ValueError("raw storage out of range")
     if fields["ok"] and (max(fields["u"],fields["v"]) > 4095 or fields["a"] > 16383):
         raise ValueError("valid frame contradicts raw ranges")
-    if version == "M2C1":
+    if version != "M1":
         if fields["cn"] > 512 or fields["cb"] > 1 or any(fields[k] > 1 for k in ("ca","cd","cv","mv")):
             raise ValueError("candidate flags/count out of range")
         if fields["cv"] != 0 or fields["cd"] != int(fields["cn"] == 512):
@@ -67,6 +75,30 @@ def parse_line(raw):
             raise ValueError("measurement validity contradicts snapshot")
         if not fields["mv"] and any(fields[k] != 0 for k in ("iu_mA","iv_mA","ma_mrad")):
             raise ValueError("invalid measurement carries numeric result")
+    if version == "M3B1":
+        if any(fields[k] > 1 for k in ("fp", "fd", "fw", "ff")) or fields["dir_ok"] != 0:
+            raise ValueError("feedback flags or direction verification invalid")
+        if fields["fs"] != 10 or fields["dir"] != 1 or fields["fn"] > 9 or fields["fr"] > 16383:
+            raise ValueError("feedback configuration or raw range invalid")
+        if fields["fp"]:
+            if fields["s"] != 1 or fields["f"] != 0 or not fields["ok"] or not fields["fn"]:
+                raise ValueError("feedback validity contradicts runtime")
+            if fields["ff"] != int(not fields["fd"]) or bool(fields["fw"]) != (fields["fn"] == 9):
+                raise ValueError("feedback warmup contradiction")
+            if (fields["ff"] and fields["fn"] != 1) or (fields["fd"] and fields["fn"] < 2):
+                raise ValueError("feedback first/sample count contradiction")
+            if fields["fd"] and not 0 < fields["fdt"] <= 3000:
+                raise ValueError("feedback interval invalid")
+        elif any(fields[k] != 0 for k in FEEDBACK_KEYS if k not in {"fo", "fs", "dir", "dir_ok"}):
+            raise ValueError("invalid feedback carries numeric result")
+        if not fields["fd"] and any(fields[k] for k in ("vd_mrad_s", "fdt")):
+            raise ValueError("invalid direct speed carries numeric result")
+        if fields["ff"] and any(fields[k] for k in ("fc", "fa_mrad")):
+            raise ValueError("first sample has nonzero origin")
+        if fields["fw"] and not fields["wdt_us"]:
+            raise ValueError("window interval missing")
+        if not fields["fw"] and any(fields[k] for k in ("vw_mrad_s", "wd_count", "wdt_us")):
+            raise ValueError("invalid window carries numeric result")
     return {"format": version, **fields}
 
 

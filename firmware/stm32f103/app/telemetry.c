@@ -20,7 +20,8 @@ void telemetry_poll_status(uint32_t now_ms)
         skipped_exports++;
         return;
     }
-    motor_status_t status;
+    /* 只有前台串行调用；一致快照放静态暂存，给1KiB主栈保留IRQ嵌套空间。 */
+    static motor_status_t status;
     if (!motor_runtime_read_status(&status)) {
         skipped_exports++;
         return;
@@ -40,9 +41,12 @@ void telemetry_poll_status(uint32_t now_ms)
     }
     /* 文本字段显式序列化，不发送 C 结构体内存布局，也不伪造物理电流/速度。 */
     int length = snprintf(serial_line, sizeof(serial_line),
-        "M2C1,s=%lu,f=%lu,n=%lu,t=%lu,e=%lu,es=%lu,ec=%lu,u=%u,v=%u,a=%u,mg=%u,ok=%u,bad=%lu,skip=%lu,"
+        "M3B1,s=%lu,f=%lu,n=%lu,t=%lu,e=%lu,es=%lu,ec=%lu,u=%u,v=%u,a=%u,mg=%u,ok=%u,bad=%lu,skip=%lu,"
         "cn=%lu,cb=%lu,ca=%u,cd=%u,cv=%u,ou_mc=%lu,ov_mc=%lu,umin=%u,umax=%u,vmin=%u,vmax=%u,"
-        "mv=%u,iu_mA=%ld,iv_mA=%ld,ma_mrad=%ld,scale_nA=%ld,pwm=blocked,power=unverified\r\n",
+        "mv=%u,iu_mA=%ld,iv_mA=%ld,ma_mrad=%ld,scale_nA=%ld,"
+        "fp=%u,fd=%u,fw=%u,ff=%u,fe=%lu,ft=%lu,fr=%u,fm=%lu,fdt=%lu,fn=%u,"
+        "fc=%lld,fa_mrad=%lld,vd_mrad_s=%ld,vw_mrad_s=%ld,wd_count=%lld,wdt_us=%llu,"
+        "fo=%lu,fs=%u,dir=1,dir_ok=0,pwm=blocked,power=unverified\r\n",
         (unsigned long)status.state, (unsigned long)status.fault_flags,
         (unsigned long)status.sample.sequence, (unsigned long)status.sample.current_completed_us,
         (unsigned long)status.sample.encoder.sequence,
@@ -61,7 +65,16 @@ void telemetry_poll_status(uint32_t now_ms)
         (unsigned int)offset.minimum_v_count, (unsigned int)offset.maximum_v_count,
         measured.is_valid ? 1u : 0u, (long)(measured.nominal_current_u_A * 1000.0f),
         (long)(measured.nominal_current_v_A * 1000.0f), (long)(measured.mechanical_angle_rad * 1000.0f),
-        (long)(BOARD_NOMINAL_A_PER_COUNT * 1000000000.0f));
+        (long)(BOARD_NOMINAL_A_PER_COUNT * 1000000000.0f),
+        status.feedback.is_valid ? 1u : 0u, status.feedback.direct_is_valid ? 1u : 0u,
+        status.feedback.window_is_valid ? 1u : 0u, status.feedback.is_first_sample ? 1u : 0u,
+        (unsigned long)status.feedback_sequence, (unsigned long)status.feedback_completed_us,
+        (unsigned int)status.feedback_raw_count, (unsigned long)status.feedback.midpoint_us,
+        (unsigned long)status.feedback.dt_us, (unsigned int)status.feedback.window_sample_count,
+        (long long)status.feedback.continuous_count, (long long)(status.feedback.continuous_angle_rad * 1000.0),
+        (long)(status.feedback.direct_speed_rad_s * 1000.0), (long)(status.feedback.window_speed_rad_s * 1000.0),
+        (long long)status.feedback.window_delta_count, (unsigned long long)status.feedback.window_dt_us,
+        (unsigned long)status.feedback_overruns, (unsigned int)BOARD_FEEDBACK_DIVIDER);
     if (length <= 0 || (uint32_t)length >= sizeof(serial_line)
         || !board_start_serial_write(serial_line, (uint32_t)length)) {
         skipped_exports++;
