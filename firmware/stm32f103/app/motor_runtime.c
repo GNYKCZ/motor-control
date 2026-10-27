@@ -207,11 +207,19 @@ void motor_runtime_poll_feedback(void)
     bool valid = feedback_step(&feedback_state, input, &result);
     previous_mask = board_enter_critical();
     if (runtime_status.state == MOTOR_RUNTIME_DISABLED) {
-        uint32_t age = runtime_status.sample.current_completed_us - input.read_completed_us;
-        if (!valid || age > BOARD_FEEDBACK_GAP_LIMIT_US) {
+        /* RV-001：必须以发布时的设备当前时间检查。ADC停更时最后一帧时间也停住，
+         * 不能用它代替now，否则前台延迟后会先发布过期有效值，再到下轮才报超时。
+         * 持锁取时与最近ADC一致，避免取时后新ADC发布造成无符号倒序误报。 */
+        uint32_t now_us = board_get_time_us();
+        uint32_t age = now_us - input.read_completed_us;
+        bool sample_is_late = now_us - runtime_status.sample.current_completed_us > BOARD_SAMPLE_GAP_LIMIT_US;
+        if (!valid || age > BOARD_FEEDBACK_GAP_LIMIT_US || sample_is_late) {
             board_disable_output();
             runtime_status.state = MOTOR_RUNTIME_FAULT;
-            runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
+            if (!valid || age > BOARD_FEEDBACK_GAP_LIMIT_US) {
+                runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
+            }
+            if (sample_is_late) { runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE; }
             motor_runtime_stop_offset(false);
             motor_runtime_clear_feedback();
         } else {
