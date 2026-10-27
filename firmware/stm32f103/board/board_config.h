@@ -10,7 +10,11 @@
 #define BOARD_SAMPLE_GAP_LIMIT_US 300u      /**< 正常约 99.94 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 1000u    /**< 首个完整有效帧最多等待 1 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 100u      /**< 前台每 100 ms 尝试导出一次，不影响 ADC 频率。 */
-#define BOARD_SERIAL_BUFFER_BYTES 768u     /**< M2C1单行容量，最坏格式长度受检查，静态分配。 */
+#define BOARD_SERIAL_BUFFER_BYTES 1024u    /**< M3B1单行容量，最坏格式长度受检查，静态分配。 */
+#define BOARD_FEEDBACK_DIVIDER 10u         /**< 每10个完整有效原始帧交接一次，非严格1kHz调度保证。 */
+#define BOARD_FEEDBACK_GAP_LIMIT_US 3000u  /**< 抽帧实际中点间隔上限，不能覆盖原始流失帧。 */
+#define BOARD_FEEDBACK_MAX_SPEED_RAD_S 100.0 /**< 仅估算先验：约955rpm，非实测速度保护。 */
+#define BOARD_FEEDBACK_WINDOW 9u           /**< 9点窗口，正常跨8个约1ms间隔；真实dt另记。 */
 #define BOARD_ADC_MAX_COUNT 4095u          /**< 12 bit ADC 原始值最大值，不代表电流已标定。 */
 #define BOARD_ENCODER_MAX_COUNT 16383u     /**< 14 bit 单圈原始计数最大值。 */
 /* 来自参考conf.h的标称参数，非本板实测；ADC满量程分母4096，非4095。

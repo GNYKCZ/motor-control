@@ -58,12 +58,30 @@ def main():
             raise RuntimeError("invalid synthetic line accepted")
     old = b"M1,s=1,f=0,n=1,t=1,e=1,es=0,ec=0,u=0,v=4095,a=16383,mg=0,ok=1,bad=0,skip=0,pwm=blocked,power=unverified\r\n"
     require(parse_line(old)["v"] == 4095)
+    # 新版本保留旧格式；64位连续计数/时间不按32位截断，有效标志逐项核验。
+    extra = (b"fp=1,fd=1,fw=1,ff=0,fe=513,ft=51272,fr=513,fm=51261,fdt=1000,fn=9,"
+             b"fc=-4294967297,fa_mrad=-1647099,vd_mrad_s=-383,vw_mrad_s=-383,"
+             b"wd_count=-8,wdt_us=8000,fo=0,fs=10,dir=1,dir_ok=0,")
+    new = lines[0].replace(b"M2C1", b"M3B1").replace(b"pwm=blocked,", extra + b"pwm=blocked,")
+    require(parse_line(new)["fc"] == -4294967297)
+    bad_new = [new.replace(b"fp=1", b"fp=0"), new.replace(b"fd=1", b"fd=0"),
+               new.replace(b"fw=1", b"fw=0"), new.replace(b"fn=9", b"fn=1"),
+               new.replace(b"fs=10", b"fs=1"), new.replace(b"dir_ok=0", b"dir_ok=1"),
+               new.replace(b"wdt_us=8000", b"wdt_us=0"),
+               new.replace(b"fc=-4294967297", b"fc=-9223372036854775809")]
+    for raw in bad_new:
+        try: parse_line(raw)
+        except ValueError: pass
+        else: raise RuntimeError("invalid M3B1 accepted")
     wrap = [old.replace(b"t=1,", b"t=4294967295,"), old.replace(b"t=1,", b"t=0,")]
     stream = b"".join(lines + wrap + [bad[2], b"x" * 3000 + b"\n", bad[-1]])
     metadata = {"source_kind": "synthetic", "firmware_sha": "0" * 40,
                 "board": "synthetic", "motor": "synthetic/disconnected", "supply": "none"}
     with tempfile.TemporaryDirectory(dir=ROOT / "build", prefix="capture_test_") as temporary:
         check_overlong_boundaries(lines[0], Path(temporary), metadata)
+        mixed = old + new + lines[0]
+        mixed_info = save_chunks([mixed[i:i+11] for i in range(0,len(mixed),11)], Path(temporary)/"mixed", metadata)
+        require(mixed_info["valid_lines"] == 3 and mixed_info["invalid_lines"] == 0)
         output = Path(temporary) / "saved"
         info = save_chunks([stream[i:i+37] for i in range(0,len(stream),37)], output, metadata)
         require((output / "raw.bin").read_bytes() == stream)

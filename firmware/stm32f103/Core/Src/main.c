@@ -120,6 +120,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     motor_runtime_check_deadline(board_get_time_us());
+    motor_runtime_poll_feedback();
     telemetry_poll_status(HAL_GetTick());
   }
   /* USER CODE END 3 */

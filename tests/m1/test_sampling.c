@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include <math.h>
 
 static uint32_t interrupt_mask;       /**< 假设备 PRIMASK，允许验证嵌套恢复。 */
 static uint32_t disable_count;        /**< 禁止调制接口调用次数。 */
@@ -264,7 +265,7 @@ static void test_telemetry(void)
     assert(!serial_busy);
     telemetry_poll_status(100u);
     assert(serial_busy);
-    assert(strstr(captured_line, "M2C1,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,") == captured_line);
+    assert(strstr(captured_line, "M3B1,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,") == captured_line);
     assert(strstr(captured_line, "u=1234,v=2345,a=123,mg=0,ok=1,bad=0,skip=0,") != NULL);
     assert(strstr(captured_line, "pwm=blocked,power=unverified\r\n") != NULL);
     char saved_line[BOARD_SERIAL_BUFFER_BYTES];
@@ -293,6 +294,7 @@ static void test_offset_candidates(void)
         sample.raw_current_u_count=(uint16_t)(2000u+i);
         sample.raw_current_v_count=(uint16_t)(3000u-i);
         motor_runtime_handle_sample(&sample);
+        motor_runtime_poll_feedback();
     }
     motor_status_t status=read_status();
     assert(status.state==MOTOR_RUNTIME_DISABLED && !status.calibration_verified && !status.offset_is_aborted);
@@ -332,10 +334,139 @@ static void test_offset_candidates(void)
         motor_sample_t missing=make_sample(3u,200u);
         if(jump==0)missing.encoder.sequence=2u;else missing.sequence=2u;
         motor_runtime_handle_sample(&missing);status=read_status();
-        assert(status.state==MOTOR_RUNTIME_DISABLED && status.sample.is_valid);
+        assert(status.state==MOTOR_RUNTIME_FAULT && status.sample.is_valid);
+        assert(status.fault_flags & MOTOR_FAULT_FEEDBACK);
         assert(status.offset_is_aborted && status.offset_rejected_count==1 && status.estimated_offset.accepted_count==1);
     }
     puts("PASS M2c runtime: continuous 512 candidates, freeze on invalid/duplicate/time/fault, no verified calibration, nominal telemetry");
+}
+
+/** M3b独立整数轨迹：原始序号与ADC序号错开，完整逐帧交接后核验前台结果。
+ * 跨圈期望来自预定整数位移，不以另一遍feedback_step作为oracle。 */
+static void test_feedback_integration(void)
+{
+    const double count_rad = 6.283185307179586476925286766559 / 16384.0;
+    start_runtime();
+    motor_sample_t warmup = make_sample(16u, 100u);
+    warmup.is_valid = false;
+    motor_runtime_handle_sample(&warmup);
+    for (uint32_t i = 0u; i <= 80u; ++i) {
+        motor_sample_t sample = make_sample(17u + i, 200u + 100u * i);
+        uint8_t packet[3];
+        make_packet((uint16_t)((16380u + i) % 16384u), 0u, packet);
+        sample.encoder = board_decode_encoder_frame(packet, 3u, 900u + i,
+            sample.current_completed_us - 50u, sample.current_completed_us - 28u);
+        motor_runtime_handle_sample(&sample);
+        motor_runtime_poll_feedback();
+        motor_status_t status = read_status();
+        assert(status.state == MOTOR_RUNTIME_DISABLED && !status.fault_flags);
+        uint32_t processed = i / 10u * 10u;
+        assert(status.feedback_sequence == 900u + processed);
+        assert(status.feedback.continuous_count == (int64_t)processed);
+        assert(status.feedback.is_valid && status.feedback.is_first_sample == (i < 10u));
+        assert(status.feedback.direct_is_valid == (i >= 10u));
+        assert(status.feedback.window_is_valid == (i >= 80u));
+        assert(fabs(status.feedback.continuous_angle_rad - processed * count_rad) < 2e-12);
+        if (i >= 10u) {
+            assert(status.feedback.dt_us == 1000u);
+            assert(fabs(status.feedback.direct_speed_rad_s - 10000.0 * count_rad) < 2e-12);
+        }
+        if (i == 0u || i == 10u || i == 80u) {
+            serial_busy = false;
+            telemetry_poll_status(3000u + i * 100u);
+            assert(strstr(captured_line, "M3B1,") == captured_line);
+            puts(captured_line); /* test_m1.py再用真实capture解析器复核完整链路。 */
+        }
+    }
+    motor_status_t final = read_status();
+    assert(final.feedback.window_dt_us == 8000u && final.feedback.window_delta_count == 80);
+    assert(fabs(final.feedback.window_speed_rad_s - 10000.0 * count_rad) < 2e-12);
+    assert(final.feedback_raw_count == 76u);
+    char held[BOARD_SERIAL_BUFFER_BYTES];
+    strcpy(held, borrowed_line);
+    for (uint32_t i = 81u; i < 100u; ++i) {
+        motor_sample_t sample = make_sample(17u + i, 200u + 100u * i);
+        sample.encoder.sequence = 900u + i;
+        sample.encoder.raw_angle_count = (uint16_t)((16380u + i) % 16384u);
+        motor_runtime_handle_sample(&sample); motor_runtime_poll_feedback();
+        telemetry_poll_status(12000u + i * 100u);
+        assert(strcmp(held, borrowed_line) == 0);
+        assert(read_status().state == MOTOR_RUNTIME_DISABLED);
+    }
+    motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+    assert(!read_status().feedback.is_valid && read_status().feedback_sequence == 0u);
+    motor_runtime_poll_feedback();
+    assert(!read_status().feedback.is_valid);
+
+    /* 反向跨圈与非标称但允许的300us原始间隔，速度必须按实际3000us算。 */
+    start_runtime();
+    for (uint32_t i = 0u; i <= 10u; ++i) {
+        motor_sample_t sample = make_sample(i + 1u, 100u + i * 300u);
+        sample.encoder.raw_angle_count = (uint16_t)((16388u - i) % 16384u);
+        motor_runtime_handle_sample(&sample); motor_runtime_poll_feedback();
+    }
+    final = read_status();
+    assert(final.state == MOTOR_RUNTIME_DISABLED && final.feedback.continuous_count == -10);
+    assert(final.feedback.dt_us == 3000u);
+    assert(fabs(final.feedback.direct_speed_rad_s + 10.0 * count_rad / 0.003) < 2e-12);
+
+    /* 不调用前台，第二个抽帧到达时只能锁故障，不能覆盖/吞掉第一个。 */
+    start_runtime();
+    for (uint32_t i = 1u; i <= 11u; ++i) {
+        motor_sample_t sample = make_sample(i, i * 100u);
+        motor_runtime_handle_sample(&sample);
+    }
+    final = read_status();
+    assert(final.state == MOTOR_RUNTIME_FAULT && final.fault_flags == MOTOR_FAULT_FEEDBACK);
+    assert(final.feedback_overruns == 1u && !final.feedback.is_valid);
+    motor_runtime_poll_feedback();
+    assert(!read_status().feedback.is_valid);
+
+    /* 非抽帧点丢失也必须被每原始帧检查捕获，ADC和encoder分别覆盖。 */
+    for (unsigned channel = 0u; channel < 2u; ++channel) {
+        start_runtime();
+        motor_sample_t first = make_sample(1u, 100u);
+        motor_runtime_handle_sample(&first); motor_runtime_poll_feedback();
+        motor_sample_t jump = make_sample(2u, 200u);
+        if (channel == 0u) jump.sequence = 3u; else jump.encoder.sequence = 3u;
+        motor_runtime_handle_sample(&jump);
+        assert(read_status().fault_flags & MOTOR_FAULT_FEEDBACK);
+        assert(!read_status().feedback.is_valid);
+    }
+    /* 半圈歧义/超过先验速度：IRQ只交接，前台计算拒绝并锁存。 */
+    for (unsigned failure = 0u; failure < 2u; ++failure) {
+        start_runtime();
+        for (uint32_t i = 0u; i <= 10u; ++i) {
+            motor_sample_t sample = make_sample(i + 1u, (i + 1u) * 100u);
+            sample.encoder.raw_angle_count = i == 10u ? (failure ? 1000u : 8192u) : 0u;
+            motor_runtime_handle_sample(&sample); motor_runtime_poll_feedback();
+        }
+        assert(read_status().fault_flags & MOTOR_FAULT_FEEDBACK);
+        assert(!read_status().feedback.is_valid);
+    }
+    /* 释放取邮箱锁后立即发生设备故障：计算不能重新发布为有效。 */
+    start_runtime();
+    motor_sample_t first = make_sample(1u, 100u);
+    motor_runtime_handle_sample(&first);
+    pending_sample = make_sample(2u, 200u); pending_sample.is_valid = false;
+    has_pending_sample = true;
+    motor_runtime_poll_feedback();
+    assert(read_status().state == MOTOR_RUNTIME_FAULT && !read_status().feedback.is_valid);
+
+    /* 新初始化明确重建原点；时钟/原始序号回绕仍保持真实步长10。 */
+    start_runtime(); device_now_us = UINT32_MAX - 500u;
+    motor_runtime_init(); motor_runtime_finish_boot(true);
+    for (uint32_t i = 0u; i <= 10u; ++i) {
+        motor_sample_t sample = make_sample(UINT32_MAX - 5u + i, UINT32_MAX - 400u + i * 100u);
+        sample.encoder.raw_angle_count = 123u;
+        motor_runtime_handle_sample(&sample); motor_runtime_poll_feedback();
+    }
+    final = read_status();
+    assert(final.state == MOTOR_RUNTIME_DISABLED && final.feedback_sequence == 4u);
+    assert(final.feedback.continuous_count == 0 && final.feedback.direct_speed_rad_s == 0.0);
+    motor_runtime_check_deadline(final.sample.current_completed_us + 301u);
+    assert(!read_status().feedback.is_valid);
+    puts("PASS M3b integration: real stride, first/warmup/window, wrap, raw gaps, overrun, fault race, reset/deadline");
 }
 
 /** 主机入口；断言失败立即非零退出，全部通过才打印最终结果。 */
@@ -347,6 +478,7 @@ int main(void)
     test_snapshot_interleaving();
     test_telemetry();
     test_offset_candidates();
+    test_feedback_integration();
     puts("PASS all M1 host software checks (hardware NOT RUN)");
     return 0;
 }

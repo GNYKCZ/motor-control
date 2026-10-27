@@ -431,6 +431,11 @@
               <FileType>1</FileType>
               <FilePath>../../../control_core/sensor_input.c</FilePath>
             </File>
+            <File>
+              <FileName>feedback.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../../../control_core/feedback.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

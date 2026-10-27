@@ -35,7 +35,7 @@ def main():
     environment["PATH"] = str(gcc.parent) + os.pathsep + environment.get("PATH", "")
     input_names = ["control_core/feedback.c", "control_core/feedback.h",
                    "tests/control_core/test_feedback.c", "tools/test_feedback.py",
-                   "docs/m3a_feedback_contract.md", "README.md"]
+                   "docs/m3a_feedback_contract.md", "docs/m3b_feedback_integration.md", "README.md"]
     inputs = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in input_names}
     evidence = {"started_at_utc": datetime.now(timezone.utc).isoformat(), "input_sha256": inputs,
                 "test_data": "deterministic integer trajectories; no random seed",

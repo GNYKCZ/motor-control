@@ -356,9 +356,42 @@ static void comparison(void)
 }
 
 /* 按组执行完整主机验收，全部通过才返回0，打印总断言数供证据核对。 */
+/* 显式抽帧沿用真实序号；默认逐帧接口不被放宽，reset不丢固定步长。 */
+static void spaced_input(void)
+{
+    feedback_state_t state;
+    feedback_result_t out;
+    CHECK(feedback_init_spaced(&state, config(9u, 1), 10u));
+    for (uint32_t i = 0u; i < 40u; ++i) {
+        CHECK(feedback_step(&state, sample(16380 + i * 10, UINT32_MAX - 15u + i * 10u,
+            UINT32_MAX - 5000u + i * 1000u), &out));
+        CHECK(out.continuous_count == (int64_t)i * 10);
+        if (i) near_value(out.direct_speed_rad_s, 10000.0L * RAD);
+        if (i >= 8u) {
+            CHECK(out.window_dt_us == 8000u && out.window_delta_count == 80);
+            near_value(out.window_speed_rad_s, 10000.0L * RAD);
+        }
+    }
+    rejected(&state, sample(16780, state.last_sequence + 1u, state.last_midpoint_us + 1000u));
+    rejected(&state, sample(16780, state.last_sequence + 20u, state.last_midpoint_us + 1000u));
+    CHECK(feedback_reset(&state)); CHECK(state.sequence_step == 10u);
+    CHECK(feedback_step(&state, sample(-30, 17u, 200u), &out));
+    CHECK(out.is_first_sample && out.continuous_count == 0 && !out.direct_is_valid);
+    unsigned char before[sizeof(state)]; memcpy(before, &state, sizeof(state));
+    CHECK(!feedback_init_spaced(&state, config(9u, 1), 0u));
+    CHECK(memcmp(before, &state, sizeof(state)) == 0);
+    CHECK(!feedback_init_spaced(&state, config(9u, 1), UINT32_C(2147483648)));
+    CHECK(memcmp(before, &state, sizeof(state)) == 0);
+    CHECK(feedback_init(&state, config(2u, 1)));
+    CHECK(state.sequence_step == 1u);
+    CHECK(feedback_step(&state, sample(0, 3u, 100u), &out));
+    rejected(&state, sample(0, 13u, 1100u));
+    puts("PASS spaced input: actual sequence stride/wrap, reset, invalid stride, default remains strict");
+}
+
 int main(void)
 {
-    trajectories(); failures(); overflow(); long_time_and_exact_wraps(); isolation(); comparison();
+    trajectories(); failures(); overflow(); long_time_and_exact_wraps(); isolation(); comparison(); spaced_input();
     printf("PASS feedback: %u checks; synthetic host only\n", checks);
     return 0;
 }

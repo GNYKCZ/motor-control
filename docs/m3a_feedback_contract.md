@@ -76,3 +76,6 @@ python -X utf8 tools/test_sensor_input.py --gcc D:/mingw64/bin/gcc.exe
 RMS固定统计第8..127拍共120点，CSV保留所有129点×3轨迹，包括首帧和未满窗口。
 目标构建/资源变化 NOT APPLICABLE（未接固件）；硬件、WCET和真实日志比较 NOT RUN。
 方向、电角度零位、相序均未板端标定。PWM继续永久禁止；功率桥高阻关断仍是未满足项。
+
+后续[M3b](m3b_feedback_integration.md)已将同一模块接入固件前台，新增显式真实序号步长初始化，
+默认逐帧+1契约保持；本文的M3a原始范围/合成实验不作为M3b板端性能证据。

@@ -9,6 +9,55 @@ static motor_status_t runtime_status;  /**< 全部状态只在本文件写入。
 static uint32_t first_sample_time_us; /**< 首包时刻，用于启动等待界限。 */
 static uint32_t boot_completed_us; /**< 启动握手时间，检测完全没有 ADC 事件的情况。 */
 static bool has_received_sample; /**< 是否收到过完整包；不能用会回绕的统计计数判断首次。 */
+static feedback_state_t feedback_state; /**< 只由前台init/poll写；IRQ从不复制或计算该大状态。 */
+static feedback_sample_t feedback_mailbox; /**< 单槽值交接；所有访问持runtime短临界区。 */
+static bool feedback_pending;
+static bool feedback_has_raw; /**< 首个有效原始帧建立基线，不要求ADC与encoder序号相等。 */
+static uint32_t feedback_raw_sequence;
+static uint32_t feedback_adc_sequence;
+static uint32_t feedback_divider;
+
+/** 已持锁：失效已发布结果及待处理输入，不重置前台独占的算法状态。 */
+static void motor_runtime_clear_feedback(void)
+{
+    feedback_result_t empty = {0};
+    runtime_status.feedback = empty;
+    runtime_status.feedback_sequence = 0u;
+    runtime_status.feedback_completed_us = 0u;
+    runtime_status.feedback_raw_count = 0u;
+    feedback_pending = false;
+}
+
+/** 已持锁：每个原始帧都核验，只把固定分频后的真实值交给前台。无浮点/循环。 */
+static void motor_runtime_queue_feedback(const motor_sample_t *sample, bool valid)
+{
+    if (runtime_status.state != MOTOR_RUNTIME_DISABLED) { return; }
+    if (!valid && !feedback_has_raw) { return; } /* 保留M1首帧启动宽限。 */
+    if (!valid || (feedback_has_raw &&
+        (sample->sequence - feedback_adc_sequence != 1u ||
+         sample->encoder.sequence - feedback_raw_sequence != 1u))) {
+        runtime_status.state = MOTOR_RUNTIME_FAULT;
+        runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
+        return;
+    }
+    feedback_has_raw = true;
+    feedback_adc_sequence = sample->sequence;
+    feedback_raw_sequence = sample->encoder.sequence;
+    if (feedback_divider == 0u) {
+        if (feedback_pending) {
+            runtime_status.feedback_overruns++;
+            runtime_status.state = MOTOR_RUNTIME_FAULT;
+            runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
+            return;
+        }
+        feedback_sample_t input = {sample->encoder.raw_angle_count, sample->encoder.sequence,
+            sample->encoder.read_started_us, sample->encoder.read_completed_us, true};
+        feedback_mailbox = input;
+        feedback_pending = true;
+        feedback_divider = BOARD_FEEDBACK_DIVIDER;
+    }
+    feedback_divider--;
+}
 
 /** 持有runtime临界区时中止未完成候选；不清已有证据，不因后续好帧自动复位。 */
 static void motor_runtime_stop_offset(bool rejected_frame)
@@ -31,6 +80,16 @@ void motor_runtime_init(void)
     first_sample_time_us = 0u;
     boot_completed_us = 0u;
     has_received_sample = false;
+    feedback_pending = false;
+    feedback_has_raw = false;
+    feedback_divider = 0u;
+    /* 在采样起动前初始化，direction=+1仅沿用raw正向，未做物理方向标定。 */
+    feedback_config_t config = {BOARD_FEEDBACK_MAX_SPEED_RAD_S, BOARD_FEEDBACK_GAP_LIMIT_US,
+        BOARD_ENCODER_TRANSFER_LIMIT_US, BOARD_FEEDBACK_WINDOW, 1};
+    if (!feedback_init_spaced(&feedback_state, config, BOARD_FEEDBACK_DIVIDER)) {
+        runtime_status.state = MOTOR_RUNTIME_FAULT;
+        runtime_status.fault_flags |= MOTOR_FAULT_INITIALIZATION;
+    }
     board_leave_critical(previous_mask);
 }
 
@@ -45,6 +104,7 @@ void motor_runtime_finish_boot(bool devices_are_ready)
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_INITIALIZATION;
         motor_runtime_stop_offset(false);
+        motor_runtime_clear_feedback();
     }
     board_leave_critical(previous_mask);
 }
@@ -56,6 +116,7 @@ void motor_runtime_latch_fault(motor_fault_t fault)
     runtime_status.fault_flags |= (uint32_t)fault;
     runtime_status.state = MOTOR_RUNTIME_FAULT;
     motor_runtime_stop_offset(false);
+    motor_runtime_clear_feedback();
     board_leave_critical(previous_mask);
 }
 
@@ -68,6 +129,7 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
         runtime_status.rejected_count++;
         motor_runtime_stop_offset(true);
+        motor_runtime_clear_feedback();
         board_leave_critical(previous_mask);
         return;
     }
@@ -121,6 +183,44 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
             runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
         }
     }
+    motor_runtime_queue_feedback(sample, is_valid);
+    if (runtime_status.state == MOTOR_RUNTIME_FAULT) {
+        motor_runtime_stop_offset(false);
+        motor_runtime_clear_feedback();
+    }
+    board_leave_critical(previous_mask);
+}
+
+void motor_runtime_poll_feedback(void)
+{
+    feedback_sample_t input;
+    uint32_t previous_mask = board_enter_critical();
+    if (runtime_status.state != MOTOR_RUNTIME_DISABLED || !feedback_pending) {
+        board_leave_critical(previous_mask);
+        return;
+    }
+    input = feedback_mailbox;
+    feedback_pending = false;
+    board_leave_critical(previous_mask);
+    /* 中断保持开放；有界历史更新及double运算全部在前台，IRQ不访问算法状态。 */
+    feedback_result_t result;
+    bool valid = feedback_step(&feedback_state, input, &result);
+    previous_mask = board_enter_critical();
+    if (runtime_status.state == MOTOR_RUNTIME_DISABLED) {
+        uint32_t age = runtime_status.sample.current_completed_us - input.read_completed_us;
+        if (!valid || age > BOARD_FEEDBACK_GAP_LIMIT_US) {
+            board_disable_output();
+            runtime_status.state = MOTOR_RUNTIME_FAULT;
+            runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
+            motor_runtime_stop_offset(false);
+            motor_runtime_clear_feedback();
+        } else {
+            runtime_status.feedback = result;
+            runtime_status.feedback_sequence = input.sequence;
+            runtime_status.feedback_completed_us = input.read_completed_us;
+            runtime_status.feedback_raw_count = input.raw_angle_count;
+        }
+    }
     board_leave_critical(previous_mask);
 }
 
@@ -152,6 +252,7 @@ void motor_runtime_check_deadline(uint32_t now_us)
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
         motor_runtime_stop_offset(false);
+        motor_runtime_clear_feedback();
     }
     board_leave_critical(previous_mask);
 }
