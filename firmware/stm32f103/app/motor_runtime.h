@@ -38,6 +38,11 @@ typedef struct {
     uint32_t feedback_completed_us; /**< 该估算输入的真实encoder读取完成时刻。 */
     uint16_t feedback_raw_count; /**< 该估算输入raw，与最新sample可能不同。 */
     uint32_t feedback_overruns; /**< 邮箱满时未能交接的抽帧数；不覆盖未消费输入。 */
+    uint32_t feedback_poll_max_us; /**< 有输入的前台反馈处理最大观测墙钟us，含抢占，非WCET。 */
+    uint32_t feedback_step_max_us; /**< feedback_step最大观测墙钟us，含取时/抢占，非WCET。 */
+    uint32_t mailbox_wait_us; /**< 最近取走输入距该ADC完成时刻的us，包含发布前IRQ处理。 */
+    uint32_t mailbox_wait_max_us; /**< 上述等待最大观测值；故障后保留。 */
+    uint32_t mailbox_overrun_us; /**< 邮箱满时两次交接ADC完成时刻之差；故障后保留。 */
 } motor_status_t;
 
 /** 前台首次初始化；归零状态，先禁止 PWM，再建立 BOOT；不得在采样启动后重入。 */

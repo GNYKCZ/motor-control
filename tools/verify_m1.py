@@ -106,7 +106,7 @@ def main():
     own_paths = [path for path in own_paths if path.resolve() not in vendor_paths]
     own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
-                  "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md")]
+                  "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -123,7 +123,7 @@ def main():
 
     documents = [root / "README.md", root / "docs/m1_sampling_contract.md", root / "docs/m1_validation.md",
                  root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
-                 root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", firmware / "README.md", firmware / "SOURCES.md"]
+                 root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", firmware / "README.md", firmware / "SOURCES.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

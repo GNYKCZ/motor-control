@@ -16,6 +16,7 @@ static bool feedback_has_raw; /**< 首个有效原始帧建立基线，不要求
 static uint32_t feedback_raw_sequence;
 static uint32_t feedback_adc_sequence;
 static uint32_t feedback_divider;
+static uint32_t feedback_enqueued_us; /**< 待消费输入所属ADC完成时刻，和原始序号一起保留。 */
 
 /** 已持锁：失效已发布结果及待处理输入，不重置前台独占的算法状态。 */
 static void motor_runtime_clear_feedback(void)
@@ -46,6 +47,7 @@ static void motor_runtime_queue_feedback(const motor_sample_t *sample, bool vali
     if (feedback_divider == 0u) {
         if (feedback_pending) {
             runtime_status.feedback_overruns++;
+            runtime_status.mailbox_overrun_us = sample->current_completed_us - feedback_enqueued_us;
             runtime_status.state = MOTOR_RUNTIME_FAULT;
             runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
             return;
@@ -53,6 +55,7 @@ static void motor_runtime_queue_feedback(const motor_sample_t *sample, bool vali
         feedback_sample_t input = {sample->encoder.raw_angle_count, sample->encoder.sequence,
             sample->encoder.read_started_us, sample->encoder.read_completed_us, true};
         feedback_mailbox = input;
+        feedback_enqueued_us = sample->current_completed_us;
         feedback_pending = true;
         feedback_divider = BOARD_FEEDBACK_DIVIDER;
     }
@@ -200,12 +203,22 @@ void motor_runtime_poll_feedback(void)
         return;
     }
     input = feedback_mailbox;
+    uint32_t poll_started_us = board_get_time_us();
+    runtime_status.mailbox_wait_us = poll_started_us - feedback_enqueued_us;
+    if (runtime_status.mailbox_wait_us > runtime_status.mailbox_wait_max_us) {
+        runtime_status.mailbox_wait_max_us = runtime_status.mailbox_wait_us;
+    }
     feedback_pending = false;
     board_leave_critical(previous_mask);
     /* 中断保持开放；有界历史更新及double运算全部在前台，IRQ不访问算法状态。 */
     feedback_result_t result;
+    uint32_t step_started_us = board_get_time_us();
     bool valid = feedback_step(&feedback_state, input, &result);
+    uint32_t step_elapsed_us = board_get_time_us() - step_started_us;
     previous_mask = board_enter_critical();
+    if (step_elapsed_us > runtime_status.feedback_step_max_us) {
+        runtime_status.feedback_step_max_us = step_elapsed_us;
+    }
     if (runtime_status.state == MOTOR_RUNTIME_DISABLED) {
         /* RV-001：必须以发布时的设备当前时间检查。ADC停更时最后一帧时间也停住，
          * 不能用它代替now，否则前台延迟后会先发布过期有效值，再到下轮才报超时。
@@ -228,6 +241,10 @@ void motor_runtime_poll_feedback(void)
             runtime_status.feedback_completed_us = input.read_completed_us;
             runtime_status.feedback_raw_count = input.raw_angle_count;
         }
+    }
+    uint32_t poll_elapsed_us = board_get_time_us() - poll_started_us;
+    if (poll_elapsed_us > runtime_status.feedback_poll_max_us) {
+        runtime_status.feedback_poll_max_us = poll_elapsed_us;
     }
     board_leave_critical(previous_mask);
 }

@@ -41,7 +41,7 @@ def main():
         if result.returncode == 0:
             # 同一真实runtime/telemetry文本直接交真实capture；三行含首帧、直接速度、满窗。
             parsed = [parse_line((line + "\n").encode("ascii")) for line in result.stdout.splitlines()
-                      if line.startswith("M3B1,")]
+                      if line.startswith("M3B2,")]
             if len(parsed) != 3 or [p["fc"] for p in parsed] != [0, 10, 80] or not parsed[-1]["fw"]:
                 raise RuntimeError("runtime -> telemetry -> capture integration mismatch")
             transcript += "PASS M3b real runtime -> telemetry -> capture: first/direct/window records\n"
@@ -49,8 +49,10 @@ def main():
     # 独立上界：将实际C格式串的每个转换替换为其整数类型最长十进制表示。
     # 包含符号与CRLF，预留结尾NUL；不靠本次正常小数值行长度推断最坏容量。
     source = (firmware / "app/telemetry.c").read_text(encoding="utf-8")
-    format_block = source.split("int length = snprintf", 1)[1].split("(unsigned long)status.state", 1)[0]
-    format_text = "".join(json.loads('"' + part + '"') for part in re.findall(r'"([^"\n]*)"', format_block))
+    format_parts = re.findall(r'return APPEND\("([^"\n]*)"', source)
+    if len(format_parts) != 13 or any(len(re.findall(r"%llu|%lld|%lu|%ld|%u", part)) > 7 for part in format_parts):
+        raise RuntimeError("telemetry format parts exceed fixed conversion budget")
+    format_text = "".join(json.loads('"' + part + '"') for part in format_parts)
     widths = {"%llu": 20, "%lld": 20, "%lu": 10, "%ld": 11, "%u": 10}
     longest = re.sub(r"%llu|%lld|%lu|%ld|%u", lambda match: "9" * widths[match[0]], format_text)
     capacity = int(re.search(r"#define BOARD_SERIAL_BUFFER_BYTES (\d+)u",

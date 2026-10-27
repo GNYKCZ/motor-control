@@ -6,7 +6,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from sensor_capture import parse_line, save_chunks
+from sensor_capture import parse_line, save_chunks, TIMING_KEYS
 
 
 def require(condition):
@@ -64,6 +64,15 @@ def main():
              b"wd_count=-8,wdt_us=8000,fo=0,fs=10,dir=1,dir_ok=0,")
     new = lines[0].replace(b"M2C1", b"M3B1").replace(b"pwm=blocked,", extra + b"pwm=blocked,")
     require(parse_line(new)["fc"] == -4294967297)
+    timing = b"".join((key + "=0,").encode() for key in TIMING_KEYS)
+    timed = new.replace(b"M3B1", b"M3B2").replace(b"pwm=blocked,", timing + b"pwm=blocked,")
+    require(parse_line(timed)["tp13_us"] == 0)
+    for invalid in (timed.replace(b"mb_wait_us=0", b"mb_wait_us=1"),
+                    timed.replace(b"fb_step_us=0", b"fb_step_us=1"),
+                    timed.replace(b"tp0_us=0", b"tp0_us=4294967296")):
+        try: parse_line(invalid)
+        except ValueError: pass
+        else: raise RuntimeError("invalid M3B2 timing accepted")
     bad_new = [new.replace(b"fp=1", b"fp=0"), new.replace(b"fd=1", b"fd=0"),
                new.replace(b"fw=1", b"fw=0"), new.replace(b"fn=9", b"fn=1"),
                new.replace(b"fs=10", b"fs=1"), new.replace(b"dir_ok=0", b"dir_ok=1"),
@@ -79,9 +88,9 @@ def main():
                 "board": "synthetic", "motor": "synthetic/disconnected", "supply": "none"}
     with tempfile.TemporaryDirectory(dir=ROOT / "build", prefix="capture_test_") as temporary:
         check_overlong_boundaries(lines[0], Path(temporary), metadata)
-        mixed = old + new + lines[0]
+        mixed = old + new + lines[0] + timed
         mixed_info = save_chunks([mixed[i:i+11] for i in range(0,len(mixed),11)], Path(temporary)/"mixed", metadata)
-        require(mixed_info["valid_lines"] == 3 and mixed_info["invalid_lines"] == 0)
+        require(mixed_info["valid_lines"] == 4 and mixed_info["invalid_lines"] == 0)
         output = Path(temporary) / "saved"
         info = save_chunks([stream[i:i+37] for i in range(0,len(stream),37)], output, metadata)
         require((output / "raw.bin").read_bytes() == stream)
