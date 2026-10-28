@@ -392,6 +392,16 @@
               <FilePath>../app/telemetry.c</FilePath>
             </File>
             <File>
+              <FileName>command.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../app/command.c</FilePath>
+            </File>
+            <File>
+              <FileName>board_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../board/board_uart.c</FilePath>
+            </File>
+            <File>
               <FileName>adc.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/adc.c</FilePath>

@@ -17,10 +17,6 @@ static uint32_t sample_sequence;        /**< 完整双 ADC 序号。 */
 static uint32_t encoder_started_us;     /**< 当前 DMA 的 CS 下降沿附近设备时间。 */
 static volatile bool encoder_is_busy;   /**< TIM2 开始，RX TC/异常结束；短临界区保护。 */
 static volatile uint32_t device_time_high_us; /**< TIM4 溢出的高位，模 2^32。 */
-static volatile bool serial_is_busy;   /**< UART 在发送及末字节移出前均为 true。 */
-static const char *serial_bytes;       /**< 借用前台静态缓冲，发送期间不许重写。 */
-static uint32_t serial_length;         /**< 当前发送的总字节数。 */
-static uint32_t serial_position;       /**< 下个送入 DR 的字节位置。 */
 
 uint32_t board_enter_critical(void)
 {
@@ -81,6 +77,7 @@ bool board_initialize_devices(void)
     TIM4->CNT = 0u;
     TIM4->DIER = TIM_DIER_UIE;
     TIM4->CR1 |= TIM_CR1_CEN;
+    board_start_serial_receive();
     return true;
 }
 
@@ -204,43 +201,5 @@ void TIM4_IRQHandler(void)
     if ((TIM4->SR & TIM_SR_UIF) != 0u) {
         TIM4->SR = ~TIM_SR_UIF;
         device_time_high_us += 65536u;
-    }
-}
-
-bool board_serial_is_busy(void)
-{
-    return serial_is_busy;
-}
-
-bool board_start_serial_write(const char *bytes, uint32_t length)
-{
-    if (bytes == NULL || length == 0u || length > BOARD_SERIAL_BUFFER_BYTES) {
-        return false;
-    }
-    uint32_t previous_mask = board_enter_critical();
-    if (serial_is_busy) {
-        board_leave_critical(previous_mask);
-        return false;
-    }
-    serial_bytes = bytes;
-    serial_length = length;
-    serial_position = 0u;
-    serial_is_busy = true;
-    USART2->CR1 |= USART_CR1_TXEIE;
-    board_leave_critical(previous_mask);
-    return true;
-}
-
-/** UART 每次 IRQ 最多交付一个字节；末字节 TC 后才释放缓冲，永不阻塞 ADC。 */
-void USART2_IRQHandler(void)
-{
-    if ((USART2->CR1 & USART_CR1_TXEIE) != 0u && (USART2->SR & USART_SR_TXE) != 0u) {
-        USART2->DR = (uint8_t)serial_bytes[serial_position++];
-        if (serial_position == serial_length) {
-            USART2->CR1 = (USART2->CR1 & ~USART_CR1_TXEIE) | USART_CR1_TCIE;
-        }
-    } else if ((USART2->CR1 & USART_CR1_TCIE) != 0u && (USART2->SR & USART_SR_TC) != 0u) {
-        USART2->CR1 &= ~USART_CR1_TCIE;
-        serial_is_busy = false;
     }
 }

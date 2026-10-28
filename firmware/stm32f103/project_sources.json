@@ -21,6 +21,8 @@
     "board/sample_frame.c",
     "app/motor_runtime.c",
     "app/telemetry.c",
+    "app/command.c",
+    "board/board_uart.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_cortex.c",
     "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_gpio.c",

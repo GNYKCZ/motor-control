@@ -22,6 +22,8 @@ bool board_start_sampling(void);
 /** 返回 1 MHz、32 bit 设备微秒计数，模 2^32（约 71.6 min）回绕。
  * 仅设备初始化成功后有效；在 IRQ 和前台均可调用，短临界区保护溢出扩展。 */
 uint32_t board_get_time_us(void);
+/** 初始化后启用USART2接收/错误IRQ；不发送命令、不使能输出。 */
+void board_start_serial_receive(void);
 /** 前台查询串口是否仍持有上次缓冲，true 时调用者不能修改该缓冲。 */
 bool board_serial_is_busy(void);
 /** 前台提交 bytes[0..length)，长度 1..BOARD_SERIAL_BUFFER_BYTES。缓冲须持续有效且不修改直到 busy=false。

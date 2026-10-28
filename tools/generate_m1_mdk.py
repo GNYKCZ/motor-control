@@ -13,7 +13,10 @@ def main():
     """将清单映射到 MDK 的相对路径和 ARM Compiler 6.13.1/O2/微库选项。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--output", type=Path, help="另写canonical工程，不覆盖用户下载配置；--check仍核对正式路径")
     arguments = parser.parse_args()
+    if arguments.check and arguments.output:
+        parser.error("--check与--output不能同时使用")
     firmware = Path(__file__).resolve().parents[1] / "firmware/stm32f103"
     project = json.loads((firmware / "project_sources.json").read_text(encoding="utf-8"))
     document = ET.Element("Project", {"xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
@@ -144,7 +147,7 @@ def main():
     ET.indent(document, space="  ")
     content = '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(
         document, encoding="unicode", short_empty_elements=False) + "\n"
-    destination = firmware / "MDK-ARM/m1_sampling.uvprojx"
+    destination = arguments.output or firmware / "MDK-ARM/m1_sampling.uvprojx"
     if arguments.check:
         if destination.read_text(encoding="utf-8") != content:
             raise SystemExit("MDK 工程与清单不一致，请重新生成。")
