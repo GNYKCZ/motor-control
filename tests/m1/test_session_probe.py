@@ -9,18 +9,21 @@ from session_probe import capture_session
 
 
 class FakePort:
-    def __init__(self, chunks, partial=False):
+    def __init__(self, chunks, partial=False, first_read_delay=0.05):
         self.chunks = iter(chunks)
         self.now = 100.0
         self.writes = []
         self.partial = partial
+        self.first_read_delay = first_read_delay
+        self.read_count = 0
 
     def clock(self):
         return self.now
 
     def read(self, size):
         assert size == 256
-        self.now += 0.05
+        self.now += self.first_read_delay if self.read_count == 0 else 0.05
+        self.read_count += 1
         return next(self.chunks, b"")
 
     def write(self, data):
@@ -71,6 +74,24 @@ def main():
             raise AssertionError("existing directory overwritten")
         assert (output / "events.jsonl").read_bytes() == before
         results.append({"mode": mode, "writes": len(port.writes), "raw_bytes": offset, "result": "PASS"})
+    # RV-001独立时间轨迹：首次read从100跳到105，跨过原104秒总期限。
+    # 显式请求仍必须恰好写一次；写完继续满2秒，被动模式不能凭延迟产生写入。
+    for passive in (False, True):
+        port = FakePort([b"startup\n"], first_read_delay=5.0)
+        output = Path(tempfile.mkdtemp(prefix="rv001_", dir=dest)) / "capture"
+        result = capture_session(port, output, {"source_kind": "synthetic"},
+                                 status_seq=None if passive else 1, clock=port.clock)
+        events = [json.loads(line) for line in (output / "events.jsonl").read_text().splitlines()]
+        assert (output / "raw.bin").read_bytes() == b"startup\n"
+        if passive:
+            assert not port.writes and not result["write_attempted"]
+        else:
+            assert port.writes == [(105.0, b"P1C1,00000001,01,A1E6\r\n")]
+            assert result["write_completed"] and result["error"] is None
+            write = next(e for e in events if e["operation"] == "write")
+            assert events[-1]["finished_monotonic"] >= write["finished_monotonic"] + 2.0
+        results.append({"mode": "delayed_passive" if passive else "delayed_status",
+                        "writes": len(port.writes), "result": "PASS"})
     (dest / "evidence.json").write_text(json.dumps({"result": "PASS", "cases": results,
         "source_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in
          ["tools/session_probe.py", "tools/command_link.py", "tools/sensor_capture.py", "tests/m1/test_session_probe.py"]},

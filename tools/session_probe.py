@@ -28,7 +28,9 @@ def capture_session(connection, output, metadata, before=2.0, after=2.0, status_
         nonlocal owned_output
         owned_output = True  # save_chunks已成功创建本次目录后才开始迭代。
         end = start + before + after
-        while clock() < end:
+        # RV-001：预接收延迟不能让显式STATUS被总期限静默跳过。
+        # 只允许一次写入；写完后重新建立after窗口，异常仍退出且不重发。
+        while (frame is not None and not result["write_attempted"]) or clock() < end:
             if frame is not None and not result["write_attempted"] and clock() - start >= before:
                 result["write_attempted"] = True  # 写入异常/部分写入也不重试。
                 event = {"operation": "write", "rx_offset": result["received_bytes"],

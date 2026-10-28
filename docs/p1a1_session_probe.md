@@ -26,6 +26,8 @@ python tools/session_probe.py --port COM9 --output build/p1a1_session_board_01 -
 不提供--status-seq即全程只读，且仍只开关一次连接。output必须不存在；不能覆盖旧记录。
 DTR/RTS在开口前设低，但具体DAP仍可能有开口控制线效应；记录中不能假定绝无重启。
 主机read有50ms超时，收尾可以多出一次read等待；不是MCU硬实时采样器。
+若系统调度或一次read使预接收超过原计划总时长，显式STATUS仍发送一次，
+从写完时重新计满after接收窗口；不按原总期限静默跳过请求。异常/部分写入仍不重试。
 
 输出包含raw.bin、records.jsonl、metadata.json，以及：
 
@@ -42,5 +44,7 @@ read(256)返回边界也不是USB64B包的直接观测；偏移只能用于关�
 离线验证：`python -B tests/m1/test_session_probe.py`，只用FakePort和可控单调时间，
 验证无显式序号时0次write、显式参数时2秒后恰好一次黄金STATUS、部分写入不重试、
 原字节/offset/时间对应、坏行不修饰、现有输出目录不覆盖。
+RV-001回归另用首次read延迟5秒跨过默认4秒总期限：显式模式仍恰好一次STATUS并继续2秒，
+被动模式仍为0次写入；旧版本会静默不发送，已留离线失败对照证据。
 证据在build/session_probe_test/evidence.json。工具只新增主机Python与文档，固件/IOC/MDK未改，
 目标固件构建为NOT APPLICABLE；板端实际使用NOT RUN。取得证据后由Design决定是否安排现场使用。
