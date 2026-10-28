@@ -1,4 +1,4 @@
-"""保存M3B2/M3B1/M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
+"""保存M3B3/M3B2/M3B1/M2C1/M1串口原字节与逐行解析，不发送控制命令，不改变板端参数。
 
 --input只处理文件；--port需另装pyserial3.5并由现场明确安排后执行。
 输出为新建目录，绝不覆盖旧采集；元数据由现场填写，不能据软件自动确认实测/校准。
@@ -17,6 +17,28 @@ RAW_KEYS = "s f n t e es ec u v a mg ok bad skip pwm power".split()
 SENSOR_KEYS = "cn cb ca cd cv ou_mc ov_mc umin umax vmin vmax mv iu_mA iv_mA ma_mrad scale_nA".split()
 FEEDBACK_KEYS = "fp fd fw ff fe ft fr fm fdt fn fc fa_mrad vd_mrad_s vw_mrad_s wd_count wdt_us fo fs dir dir_ok".split()
 TIMING_KEYS = "fb_poll_us fb_step_us mb_wait_us mb_max_us mb_overrun_us".split() + [f"tp{i}_us" for i in range(14)]
+COMPACT_KEYS = "s f n t u v a ok fp fd fw fo fb_us mb_us log_us log_id".split()
+
+
+def parse_compact(fields):
+    """M3B3只含本轮故障验收的uint32/原始值；不伪造旧协议已删的名义量字段。"""
+    if set(fields) != set(COMPACT_KEYS):
+        raise ValueError("compact field set mismatch")
+    if any(not isinstance(v, int) or not 0 <= v < 2**32 for v in fields.values()):
+        raise ValueError("compact unsigned field out of range")
+    if fields["s"] > 2 or fields["log_id"] > 16 or any(fields[k] > 1 for k in ("ok", "fp", "fd", "fw")):
+        raise ValueError("compact state/flag/id out of range")
+    if max(fields[k] for k in ("u", "v", "a")) > 65535:
+        raise ValueError("compact raw storage out of range")
+    if fields["ok"] and (max(fields["u"], fields["v"]) > 4095 or fields["a"] > 16383):
+        raise ValueError("compact valid raw range contradiction")
+    if fields["fp"] and (fields["s"] != 1 or fields["f"] or not fields["ok"]):
+        raise ValueError("compact feedback validity contradicts runtime")
+    if (fields["fd"] and not fields["fp"]) or (fields["fw"] and not fields["fd"]):
+        raise ValueError("compact feedback progress contradiction")
+    if fields["fo"] and (fields["s"] != 2 or not (fields["f"] & 8)):
+        raise ValueError("compact overrun without latched feedback fault")
+    return {"format": "M3B3", **fields}
 
 
 def parse_line(raw):
@@ -26,7 +48,7 @@ def parse_line(raw):
     text = raw[:-1].removesuffix(b"\r").decode("ascii")
     pieces = text.split(",")
     version = pieces[0]
-    if version not in {"M1", "M2C1", "M3B1", "M3B2"}:
+    if version not in {"M1", "M2C1", "M3B1", "M3B2", "M3B3"}:
         raise ValueError("unknown format version")
     fields = {}
     for piece in pieces[1:]:
@@ -39,6 +61,8 @@ def parse_line(raw):
             if re.fullmatch(r"-?[0-9]+", value) is None:
                 raise ValueError("not an integer: " + key)
             fields[key] = int(value)
+    if version == "M3B3":
+        return parse_compact(fields)
     expected = set(RAW_KEYS + (SENSOR_KEYS if version != "M1" else [])
                    + (FEEDBACK_KEYS if version in {"M3B1", "M3B2"} else [])
                    + (TIMING_KEYS if version == "M3B2" else []))

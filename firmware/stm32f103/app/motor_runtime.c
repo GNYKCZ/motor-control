@@ -47,7 +47,10 @@ static void motor_runtime_queue_feedback(const motor_sample_t *sample, bool vali
     if (feedback_divider == 0u) {
         if (feedback_pending) {
             runtime_status.feedback_overruns++;
-            runtime_status.mailbox_overrun_us = sample->current_completed_us - feedback_enqueued_us;
+            uint32_t age_us = sample->current_completed_us - feedback_enqueued_us;
+            if (age_us > runtime_status.mailbox_wait_max_us) {
+                runtime_status.mailbox_wait_max_us = age_us;
+            }
             runtime_status.state = MOTOR_RUNTIME_FAULT;
             runtime_status.fault_flags |= MOTOR_FAULT_FEEDBACK;
             return;
@@ -204,21 +207,16 @@ void motor_runtime_poll_feedback(void)
     }
     input = feedback_mailbox;
     uint32_t poll_started_us = board_get_time_us();
-    runtime_status.mailbox_wait_us = poll_started_us - feedback_enqueued_us;
-    if (runtime_status.mailbox_wait_us > runtime_status.mailbox_wait_max_us) {
-        runtime_status.mailbox_wait_max_us = runtime_status.mailbox_wait_us;
+    uint32_t wait_us = poll_started_us - feedback_enqueued_us;
+    if (wait_us > runtime_status.mailbox_wait_max_us) {
+        runtime_status.mailbox_wait_max_us = wait_us;
     }
     feedback_pending = false;
     board_leave_critical(previous_mask);
     /* 中断保持开放；有界历史更新及double运算全部在前台，IRQ不访问算法状态。 */
     feedback_result_t result;
-    uint32_t step_started_us = board_get_time_us();
     bool valid = feedback_step(&feedback_state, input, &result);
-    uint32_t step_elapsed_us = board_get_time_us() - step_started_us;
     previous_mask = board_enter_critical();
-    if (step_elapsed_us > runtime_status.feedback_step_max_us) {
-        runtime_status.feedback_step_max_us = step_elapsed_us;
-    }
     if (runtime_status.state == MOTOR_RUNTIME_DISABLED) {
         /* RV-001：必须以发布时的设备当前时间检查。ADC停更时最后一帧时间也停住，
          * 不能用它代替now，否则前台延迟后会先发布过期有效值，再到下轮才报超时。
@@ -256,6 +254,28 @@ bool motor_runtime_read_status(motor_status_t *status)
     }
     uint32_t previous_mask = board_enter_critical();
     *status = runtime_status;
+    board_leave_critical(previous_mask);
+    return true;
+}
+
+bool motor_runtime_read_log(motor_log_snapshot_t *snapshot)
+{
+    if (snapshot == NULL) { return false; }
+    uint32_t previous_mask = board_enter_critical();
+    snapshot->state = runtime_status.state;
+    snapshot->fault_flags = runtime_status.fault_flags;
+    snapshot->sequence = runtime_status.sample.sequence;
+    snapshot->completed_us = runtime_status.sample.current_completed_us;
+    snapshot->raw_u = runtime_status.sample.raw_current_u_count;
+    snapshot->raw_v = runtime_status.sample.raw_current_v_count;
+    snapshot->raw_angle = runtime_status.sample.encoder.raw_angle_count;
+    snapshot->sample_is_valid = runtime_status.sample.is_valid;
+    snapshot->position_is_valid = runtime_status.feedback.is_valid;
+    snapshot->direct_is_valid = runtime_status.feedback.direct_is_valid;
+    snapshot->window_is_valid = runtime_status.feedback.window_is_valid;
+    snapshot->feedback_overruns = runtime_status.feedback_overruns;
+    snapshot->feedback_max_us = runtime_status.feedback_poll_max_us;
+    snapshot->mailbox_max_us = runtime_status.mailbox_wait_max_us;
     board_leave_critical(previous_mask);
     return true;
 }

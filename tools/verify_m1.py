@@ -63,7 +63,7 @@ def main():
         linked_map = (root / "build/m1/m1_sampling.map").read_text(encoding="utf-8")
         for name in ["SystemClock_Config", "MX_GPIO_Init", "MX_DMA_Init", "MX_ADC1_Init", "MX_ADC2_Init",
                      "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init",
-                     "sensor_input_convert", "sensor_offset_add", "feedback_step", "feedback_init_spaced"]:
+                     "sensor_offset_add", "feedback_step", "feedback_init_spaced", "motor_runtime_read_log"]:
             require(re.search(r"^\s*" + name + r"\s+0x080[0-9a-fA-F]+\s+Thumb Code", linked_map, re.M),
                     "generated entry missing from linked image: " + name)
         print("PASS generated clock, all 9 peripheral entries and canonical sensor/feedback entries are linked")
@@ -106,7 +106,7 @@ def main():
     own_paths = [path for path in own_paths if path.resolve() not in vendor_paths]
     own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
-                  "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md")]
+                  "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md", "docs/m3b3_compact_log.md", "tests/m1/test_telemetry_compact.c")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -123,7 +123,7 @@ def main():
 
     documents = [root / "README.md", root / "docs/m1_sampling_contract.md", root / "docs/m1_validation.md",
                  root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
-                 root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", firmware / "README.md", firmware / "SOURCES.md"]
+                 root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", root / "docs/m3b3_compact_log.md", firmware / "README.md", firmware / "SOURCES.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")
