@@ -377,6 +377,11 @@
               <FilePath>../board/board_io.c</FilePath>
             </File>
             <File>
+              <FileName>board_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../board/board_pwm.c</FilePath>
+            </File>
+            <File>
               <FileName>sample_frame.c</FileName>
               <FileType>1</FileType>
               <FilePath>../board/sample_frame.c</FilePath>

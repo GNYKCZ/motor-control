@@ -23,6 +23,7 @@ def main():
     fw = root / "firmware/stm32f103"
     sources = [fw / n for n in ("board/sample_frame.c", "board/board_uart.c", "app/motor_runtime.c",
                                 "app/command.c", "app/telemetry.c")]
+    sources += [root / "tests/m1/runtime_gate_stub.c"]
     sources += [root / n for n in ("control_core/sensor_input.c", "control_core/feedback.c", "tests/m1/test_command.c")]
     inputs = sources + list((fw / "app").glob("*.h")) + list((fw / "board").glob("*.h"))
     inputs += [root / n for n in ("tests/m1/uart_stub/usart.h", "tools/test_command.py", "tools/command_link.py", "tools/sensor_capture.py", "control_core/feedback.h", "control_core/sensor_input.h")]

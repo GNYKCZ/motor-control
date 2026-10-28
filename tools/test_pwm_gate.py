@@ -1,0 +1,83 @@
+"""生产board_pwm/runtime/command的主机寄存器交错测试；没有串口/下载/硬件操作。"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gcc", type=Path, required=True)
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    fw = root / "firmware/stm32f103"
+    output = root / "build/host_pwm_gate"
+    output.mkdir(parents=True, exist_ok=True)
+    gcc = args.gcc.resolve()
+    environment = os.environ.copy()
+    environment["PATH"] = str(gcc.parent) + os.pathsep + environment.get("PATH", "")
+    model = root / "tests/m1/pwm_model"
+    c_sources = [fw / p for p in ("app/motor_runtime.c", "app/command.c", "board/sample_frame.c")]
+    c_sources += [root / "control_core" / (n + ".c") for n in ("feedback", "sensor_input")]
+    inputs = c_sources + [fw / "board/board_pwm.c", root / "tests/m1/test_pwm_gate.cpp", Path(__file__).resolve()]
+    inputs += list(model.glob("*.h")) + list((fw / "app").glob("*.h")) + list((fw / "board").glob("*.h"))
+    inputs += [root / "control_core" / (n + ".h") for n in ("feedback", "sensor_input")]
+    hashes = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    evidence = {"head": head, "input_sha256": hashes, "result": "FAIL", "steps": [], "hardware": "NOT RUN"}
+
+    def run(cmd):
+        command = list(map(str, cmd))
+        result = subprocess.run(command, cwd=root, env=environment, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=60)
+        text = result.stdout + result.stderr
+        evidence["steps"].append({"command": command, "returncode": result.returncode, "output": text})
+        if text.strip():
+            print(text, end="" if text.endswith("\n") else "\n")
+        if result.returncode:
+            raise RuntimeError("gate test command failed")
+
+    try:
+        run([gcc, "--version"])
+        includes = [flag for directory in (model, fw / "board", fw / "app", root / "control_core") for flag in ("-I", directory)]
+        flags = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic", *includes]
+        for synthetic in (False, True):
+            tag = "synthetic" if synthetic else "production"
+            define = ["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else []
+            objects = []
+            for source in c_sources:
+                obj = output / (tag + "_" + source.stem + ".o")
+                run([gcc, "-std=c11", *flags, *define, "-c", source, "-o", obj])
+                objects.append(obj)
+            cpp = [gcc.parent / "g++.exe", "-std=c++11", *flags, *define]
+            board = output / (tag + "_board_pwm.o")
+            run([*cpp, "-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_pwm.c", "-o", board])
+            exe = output / (tag + ".exe")
+            run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
+            run([exe])
+        negative = subprocess.run([str(gcc), "-std=c11", *map(str, flags), "-DMOTOR_GATE_TEST_PROFILES",
+                                   "-D__arm__", "-fsyntax-only", str(fw / "app/motor_runtime.c")],
+                                  cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+        if negative.returncode == 0 or "Synthetic output profiles are forbidden" not in negative.stderr:
+            raise RuntimeError("target synthetic-profile compile guard failed")
+        evidence["target_profile_guard"] = "PASS: target architecture rejects synthetic profiles at compile time"
+        evidence["result"] = "PASS"
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+        evidence["error"] = str(error)
+    finally:
+        if any(hashlib.sha256((root / p).read_bytes()).hexdigest() != h for p, h in hashes.items()):
+            evidence.update(result="FAIL", error="inputs changed during tests")
+        path = output / "test_evidence.json"
+        if path.exists():
+            old = json.loads(path.read_text(encoding="utf-8"))
+            if old.get("result") != "PASS":
+                number = len(list(output.glob("failed_*.json"))) + 1
+                (output / f"failed_{number}.json").write_bytes(path.read_bytes())
+        path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    raise SystemExit(0 if evidence["result"] == "PASS" else 1)
+
+
+if __name__ == "__main__":
+    main()

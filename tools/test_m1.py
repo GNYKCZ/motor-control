@@ -26,6 +26,7 @@ def main():
     environment = os.environ.copy()
     environment["PATH"] = str(gcc.parent) + os.pathsep + environment.get("PATH", "")
     sources = [fw / p for p in ("board/sample_frame.c", "app/motor_runtime.c", "app/telemetry.c")]
+    sources += [root / "tests/m1/runtime_gate_stub.c"]
     sources += [root / "control_core/sensor_input.c", root / "control_core/feedback.c", root / "tests/m1/test_sampling.c"]
     unit = root / "tests/m1/test_telemetry_compact.c"
     inputs = sources + [unit, root / "tools/sensor_capture.py"]

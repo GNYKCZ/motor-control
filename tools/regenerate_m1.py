@@ -1,6 +1,6 @@
 """用 CubeMX 6.12.0 实际生成初始化并核对正式固件；不构建、不下载、不操作硬件。
 
-默认只检查。--write 只更新清单内生成文件，保留正式 main.c 的 USER CODE 内容。
+默认只检查。--write 只更新清单内生成文件，保留正式 main.c/tim.c 的 USER CODE 内容。
 每次在 build 下新建干净目录，完整日志及哈希保留在那里；不覆盖 board/app/IRQ。
 """
 import argparse
@@ -61,7 +61,7 @@ def main():
         source, dest = raw / name, fw / "Core" / name
         generated = source.read_text(encoding="utf-8")
         current = dest.read_text(encoding="utf-8") if dest.exists() else ""
-        integrated = preserve_user_code(generated, current) if name == "Src/main.c" else generated
+        integrated = preserve_user_code(generated, current) if name in {"Src/main.c", "Src/tim.c"} else generated
         content = integrated.encode("utf-8")  # 仅统一 CRLF→LF，不修剪厂家空白。
         if not dest.exists() or dest.read_bytes() != content:
             differences.append(name)
