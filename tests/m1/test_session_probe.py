@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from session_probe import capture_session
 
@@ -107,11 +108,51 @@ def main():
             assert events[-1]["finished_monotonic"] >= write["finished_monotonic"] + 2.0
         results.append({"mode": "delayed_passive" if passive else "delayed_status",
                         "writes": len(port.writes), "result": "PASS"})
+    for mode in ("complete", "partial", "exception", "delayed"):
+        port = FakePort([b"before\n"], partial=mode == "partial", write_error=mode == "exception",
+                        first_read_delay=5.0 if mode == "delayed" else 0.05)
+        output = Path(tempfile.mkdtemp(prefix="stop_", dir=dest)) / "capture"
+        failed = False
+        try:
+            capture_session(port, output, {"source_kind": "synthetic"}, stop_seq=2, clock=port.clock)
+        except RuntimeError:
+            failed = True
+        assert failed == (mode in {"partial", "exception"})
+        assert len(port.writes) == 1 and port.writes[0][0] >= 102.0
+        assert port.writes[0][1] == b"P1C1,00000002,02,1A67\r\n"  # 独立STOP黄金帧。
+        event = next(json.loads(l) for l in (output / "events.jsonl").read_text().splitlines()
+                     if json.loads(l)["operation"] == "write")
+        summary = json.loads((output / "session_result.json").read_text())
+        metadata = json.loads((output / "metadata.json").read_text())
+        for item in (event, summary, metadata):
+            assert item["requested_command"] == "stop" and item["requested_sequence"] == 2
+        assert summary["stop_requested"] and not summary["status_requested"]
+        count = 5 if mode == "partial" else None if mode == "exception" else 23
+        assert event["length"] == count
+        report = "partial" if mode == "partial" else "unknown" if mode == "exception" else "complete"
+        assert event["write_report"] == summary["write_report"] == report
+        assert summary["write_attempted"] and summary["write_completed"] == (count == 23)
+        assert bool(summary["error"]) == failed
+        assert event["reported_written_hex"] == (None if count is None else b"P1C1,00000002,02,1A67\r\n"[:count].hex())
+        if mode == "delayed":
+            assert port.writes[0][0] == 105.0 and port.now >= 107.0  # RV-001也覆盖STOP。
+        results.append({"mode": "stop_" + mode, "writes": 1, "result": "PASS"})
+    port = FakePort([])
+    try:
+        capture_session(port, dest / "mutually_exclusive", {}, status_seq=1, stop_seq=2, clock=port.clock)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("API accepted STATUS and STOP together")
+    assert not port.writes
+    cli = subprocess.run([sys.executable, "-B", str(root / "tools/session_probe.py"),
+                          "--status-seq", "1", "--stop-seq", "2"], capture_output=True, timeout=10)
+    assert cli.returncode == 2  # argparse在任何serial导入/打开之前拒绝互斥参数。
     (dest / "evidence.json").write_text(json.dumps({"result": "PASS", "cases": results,
         "source_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in
          ["tools/session_probe.py", "tools/command_link.py", "tools/sensor_capture.py", "tests/m1/test_session_probe.py"]},
         "hardware": "NOT RUN"}, indent=2) + "\n", encoding="utf-8")
-    print("PASS passive/STATUS/partial/exception; RV-001 delayed read; RV-002 requested vs reported/unknown bytes; no retry or hardware")
+    print("PASS passive/STATUS/STOP golden/single-write/mutual exclusion; RV-001 and RV-002; no retry or hardware")
 
 
 if __name__ == "__main__":
