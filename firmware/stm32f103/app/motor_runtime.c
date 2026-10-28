@@ -115,6 +115,14 @@ void motor_runtime_finish_boot(bool devices_are_ready)
     board_leave_critical(previous_mask);
 }
 
+void motor_runtime_stop(void)
+{
+    uint32_t mask=board_enter_critical();
+    board_disable_output();
+    /* 不把FAULT改回DISABLED；当前所有路径都禁止PWM，未来ACTIVE须另审资格撤销竞态。 */
+    board_leave_critical(mask);
+}
+
 void motor_runtime_latch_fault(motor_fault_t fault)
 {
     board_disable_output();

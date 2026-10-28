@@ -24,7 +24,7 @@ M2a/M2b算法保持不变，不接入PI或使能。下面CubeMX原始文件/许�
 | `Core/Src/adc.c` | [adc.c](Core/Src/adc.c) | CubeMX 生成 ADC1 PA0/ADC2 PA1、单次双注入同步、7.5周期；board 校准和双 JEOC 发布，不迁入原 FOC 回调 |
 | `Core/Src/spi.c`、DMA | [spi.c](Core/Src/spi.c)、[dma.c](Core/Src/dma.c) | CubeMX 生成 SPI1 1.125 MHz、CPHA2、RX ch2/TX ch3、normal/byte/MINC；board 拥有3字节事务、缓冲、TC/TE与完整检查 |
 | `Core/Src/tim.c` | [tim.c](Core/Src/tim.c) | CubeMX 生成 TIM1 CMS3/ARR1799/RCR3/update TRGO、无PWM；TIM2 ITR0 reset、PSC71、比较50 us；TIM4 PSC71。原78 us及约10.2857 MHz计时不沿用 |
-| `Core/Src/usart.c` | [usart.c](Core/Src/usart.c) | CubeMX 生成115200/8N1 TX；F1模式要求 PA3 RX 引脚同时选中，但硬件接收关闭；board TXE/TC发送替代原阻塞 fputc |
+| `Core/Src/usart.c` | [usart.c](Core/Src/usart.c) | CubeMX生成115200/8N1，P1a1将TX改为TX_RX；[board_uart.c](board/board_uart.c)独占RX/TXE/TC，独立编写固定帧命令，不引入原阻塞fputc |
 | 外设 IRQ/ADC 回调中的控制 | [board_io.c](board/board_io.c)、[sample_frame.c](board/sample_frame.c) | 本项目独立适配；保留双JEOC、DMA完成/错误、CRC、时间和序号。生成 IRQ 不导入，避免重复标志所有权 |
 | 状态/导出 | [motor_runtime.c](app/motor_runtime.c)、[telemetry.c](app/telemetry.c) | 本项目自编，BOOT/DISABLED/FAULT、故障锁存和一致快照；没有使能、对齐或默认电流 |
 | HAL/CMSIS/system/startup | [vendor_sources.json](vendor_sources.json) | 原39项来自参考快照；本次新增6项必要HAL文件与2项包许可，共47项原始文件 |
@@ -69,3 +69,7 @@ HAL IRQ清掉board独占标志。初始化前及故障门控将PA8/9/10置普通
 [ST RM0008](https://www.st.com/resource/en/reference_manual/rm0008-stm32f103xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
 与 [TI DRV8313](https://www.ti.com/lit/ds/symlink/drv8313.pdf)。
 U4实际装配、SPI波形/实时预算、复位瞬态和功率电气效果需板端确认；本批未烧录、上电或启动电机。
+
+P1a1仅参考原USART2收发模式和H8/PA3连接事实，新增自编[command](app/command.c)与
+[UART适配](board/board_uart.c)，原ADC/FOC USER CODE与自动对齐均未迁入。
+[协议和验收](../../docs/p1a1_command_link.md)区分软件回归与未执行的RX现场往返；PWM仍永久禁止。

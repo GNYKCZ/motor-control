@@ -75,6 +75,8 @@ void motor_runtime_check_deadline(uint32_t now_us);
  * 每10个连续有效帧产生一个输入；前台尽快消费，无严格1kHz/WCET声明。
  * 重入/并发前台调用不允许；状态独占，任何中途IRQ故障均阻止结果重新有效。 */
 void motor_runtime_poll_feedback(void);
+/** IRQ/前台幂等STOP：立即禁止调制，不等待回执、不清故障/采样历史；本批永无使能分支。 */
+void motor_runtime_stop(void);
 /** IRQ 故障入口：先禁止 PWM，再锁存非零 fault；不清故障，不使能输出。 */
 void motor_runtime_latch_fault(motor_fault_t fault);
 /** 前台读取完整状态副本到 status；NULL 返回 false，不写内存。

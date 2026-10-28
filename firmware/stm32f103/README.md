@@ -2,7 +2,7 @@
 
 本工程是 Issue #1 的 P0a 软件基线，初始化现依据 [架构 #7 v1.4](https://github.com/GNYKCZ/motor-control/issues/7#issuecomment-6393651536)。
 只实现完整原始采样、设备时间、禁用生命周期和最小串口状态；没有电流闭环、速度/位置控制、
-通电对齐、使能命令或柔顺模式。不要把本批完成理解成整个 P0 已完成。
+通电对齐、使能命令或柔顺模式。P0已按用户接受的基础功能口径完成；连续性能与P1输出尚未验收。
 
 **输出边界：三路 PWM 永久禁止；功率桥高阻关断仍是未满足项。** 用户已接受先交软件基线。
 本地 V2.0 原理图的 EN1–3、nSLEEP、nRESET 接固定电源，软件不能关闭它们。
@@ -53,7 +53,7 @@ M3b将同一feedback模块接入前台，输出版本为[M3B1](../../docs/m3b_fe
 | `Core/Src/adc.c` | [adc.c](Core/Src/adc.c)、[board_io.c](board/board_io.c) | **CubeMX 生成配置 + 自编完成事件**：双 ADC 注入同步；双 JEOC 才发布原始值 |
 | `Core/Src/spi.c`、DMA | [spi.c](Core/Src/spi.c)、[dma.c](Core/Src/dma.c)、[board_io.c](board/board_io.c) | **CubeMX 生成基础配置 + 自编 DMA 事务**：配置 SPI1/双 DMA；board 管理缓冲、CRC/长度/时间和完整发布 |
 | `Core/Src/tim.c` | [tim.c](Core/Src/tim.c)、[board_io.c](board/board_io.c) | **CubeMX 生成**：TIM1 仅计数/TRGO，TIM2 50 us，TIM4 1 MHz；board 只清状态、起动计数/事件和扩展时间 |
-| `Core/Src/usart.c` | [usart.c](Core/Src/usart.c)、[telemetry.c](app/telemetry.c) | **CubeMX 生成 + 自编非阻塞发送**：115200/8N1 TX；TXE/TC IRQ 由 board 独占 |
+| `Core/Src/usart.c` | [usart.c](Core/Src/usart.c)、[telemetry.c](app/telemetry.c) | **CubeMX 生成 + 自编有界收发**：115200/8N1 TX_RX；RX/TXE/TC由board_uart独占，命令语义见P1a1契约 |
 | `Drivers/motor/foc.c`、`foc.h` 及控制参数/查表 | **M1 暂未引入**；未来控制核位置见 [SOURCES.md](SOURCES.md) | 当前无控制环调用者，作者自定义源码公开再发布许可尚未明确；不能把可运行参考工程冒称本仓库已移植 FOC |
 | HAL/CMSIS、ST 系统和启动模板 | [Drivers/](Drivers/)、[system_stm32f1xx.c](Core/Src/system_stm32f1xx.c)、[startup](MDK-ARM/startup_stm32f103xb.s) | **直接原样复用**：39 个必要厂家文件逐项保留原字节、许可与署名，见 [准确来源/哈希清单](vendor_sources.json) |
 | `MDK-ARM/stm32_foc_test.uvprojx` | [m1_sampling.uvprojx](MDK-ARM/m1_sampling.uvprojx)、[project_sources.json](project_sources.json) | **保留工程形态，重建源清单**：沿用 ARM Compiler/O2 约束，原项目文件未直接复制 |
@@ -73,7 +73,8 @@ Reset_Handler → SystemInit → C 运行库 → main
   board_initialize_devices → 校准 ADC、启用 SPI、清初始化状态并起动 TIM4
   motor_runtime_finish_boot → 成功进入 DISABLED，失败进入 FAULT
   board_start_sampling → 只启动计数/采样事件，不启动 PWM 通道
-  while: motor_runtime_check_deadline + telemetry_poll_status
+  while: motor_runtime_check_deadline + motor_runtime_poll_feedback
+         + command_poll（回执优先）或telemetry_poll_status
 
 TIM1 更新 TRGO ─┬→ ADC1/2 同步注入转换
                 └→ TIM2 计数归零，50 us 后比较 IRQ 开始 SSI/DMA
@@ -81,7 +82,7 @@ DMA1 Channel2 TC → 检查完整传输 → CRC/状态校验 → 一次替换 co
 ADC1_2 IRQ → 确认双 JEOC → 取完成帧副本 → board_make_sample
            → motor_runtime_handle_sample → 一次发布状态
 前台 → motor_runtime_read_status（一致复制）→ snprintf（仅前台）
-     → UART TXE/TC IRQ（每次最多一个字节；TC 后释放缓冲）
+     → UART RX/TXE/TC IRQ（最多一个RX和一个TX事件；TC后释放缓冲）
 ```
 
 CubeMX 拥有外设参数、HAL 句柄、MSP/NVIC；board 拥有 DMA 事务、完成编码器帧和设备计数；runtime 拥有生命周期/故障/状态快照；
@@ -116,10 +117,10 @@ CRC 合格；传输22 us <=40 us；从开始到 ADC 完成50 us <=200 us
 它们构成传输区间，不是传感器内部精确采样时刻。考虑手册 <5 us 内部延迟、SPI 传输和 IRQ
 延迟后，物理角度年龄还需实测/进一步界定。本批不使用角度做实时换相。
 
-串口是115200、8N1、只有TX，每100ms尝试开始一行。当前前缀`M3B3`，固定16字段的
+串口是115200、8N1、TX_RX；周期日志每100ms尝试开始一行。当前前缀`M3B3`，固定16字段的
 含义、单位、范围和已删字段理由见[M3B3契约](../../docs/m3b3_compact_log.md)。
 M1/M2C1/M3B1/M3B2是历史格式，解析器仍兼容；不把历史完整字段表当作当前周期输出。
-UART忙时不重写在途缓冲，有界放弃本行，不再维护未输出的skip计数；没有主机ACK，
+UART忙时不重写在途缓冲，有界放弃本行，不再维护未输出的skip计数；周期日志没有主机ACK；P1a1请求有独立P1R1回执，
 发送端状态不代表电脑已收到数据。功率桥高阻仍未验证，删掉固定power标签不表示验证通过。
 
 ## 时间：哪些是配置推导，哪些还没有测量
@@ -190,8 +191,9 @@ python tools/regenerate_m1.py --cubemx 'D:\FOC_Tools\STM32CubeMX-6.12.0\STM32Cub
 工具版本/年份改变造成 Header 差异也需明确复核。逐项证据见 [本次验证](../../docs/cubemx_validation.md)。
 
 外设 `.c/.h` 和全局 MSP 原样生成，无手工寄存器参数覆盖。PA3 因 CubeMX F1 的 Asynchronous 模式要求
-TX/RX 引脚成对选择而保留为输入，但 `UartMode=UART_MODE_TX`，不会开启接收。
-`board_initialize_devices` 只执行校准、SPI SPE 运行使能、清 UG 状态和起动 TIM4；采样起动另由
+TX/RX 引脚成对选择而保留为输入；P1a1将 `UartMode` 改为 `UART_MODE_TX_RX`，
+由[board_uart.c](board/board_uart.c)拥有有界RX/TX，应用调用[command.c](app/command.c)处理命令。
+`board_initialize_devices` 执行校准、SPI SPE运行使能、清UG状态、起动TIM4，再启用UART接收IRQ；采样起动另由
 `board_start_sampling` 负责。`board_disable_output` 是初始化前及故障时可调用的独立门控，始终把
 PA8/9/10 设为 GPIO 低并清 MOE/CCER；它与生成 GPIO 低电平配置一致，不覆盖外设参数。
 复位到 `motor_runtime_init` 前引脚仍遵循芯片复位状态，软件不能保证上电全过程的电气状态。
@@ -221,3 +223,6 @@ CubeMX 还会输出 IRQ 路由和临时 system/工程片段，它们不导入、
 物理单位后缀保留标准大小写，例如 `_us`、`_rad_s`、`_A`；本批原始计数用 `_count`，
 不能仅改名加 `_A` 就当作已标定电流。厂家函数不重命名；新增函数采用模块+动作+对象，
 公共接口不用 cfg/ctx/fdb/tmp。注释讲明作用、调用前提、状态与错误，避免只逐行翻译语法。
+
+P1a1的23B请求、56B回执、CRC、序号、STOP优先级与现场工具详见
+[无输出命令往返契约](../../docs/p1a1_command_link.md)。ARM/PULSE拒绝，板端实际RX仍NOT RUN。

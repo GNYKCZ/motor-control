@@ -4,6 +4,7 @@
 输出为新建目录，绝不覆盖旧采集；元数据由现场填写，不能据软件自动确认实测/校准。
 """
 import argparse
+import binascii
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -45,6 +46,19 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
+    if raw.startswith(b"P1R1,"):
+        # 固定56字节、CRC覆盖0..49含最后逗号；独立使用Python库，不照搬C的CRC循环。
+        pattern = rb"P1R1,([0-9A-F]{8}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{4})\r\n"
+        match = re.fullmatch(pattern, raw)
+        if not match or len(raw) != 56:
+            raise ValueError("reply frame layout mismatch")
+        values = [int(value, 16) for value in match.groups()]
+        if binascii.crc_hqx(raw[:50], 0xFFFF) != values[-1]:
+            raise ValueError("reply CRC mismatch")
+        fields = dict(zip("q c r s f n t crc".split(), values))
+        if fields["s"] > 2 or fields["r"] & 0x7F > 7:
+            raise ValueError("reply state/result out of range")
+        return {"format": "P1R1", **fields}
     text = raw[:-1].removesuffix(b"\r").decode("ascii")
     pieces = text.split(",")
     version = pieces[0]

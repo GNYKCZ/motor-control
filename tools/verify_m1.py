@@ -63,7 +63,9 @@ def main():
         linked_map = (root / "build/m1/m1_sampling.map").read_text(encoding="utf-8")
         for name in ["SystemClock_Config", "MX_GPIO_Init", "MX_DMA_Init", "MX_ADC1_Init", "MX_ADC2_Init",
                      "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init",
-                     "sensor_offset_add", "feedback_step", "feedback_init_spaced", "motor_runtime_read_log"]:
+                     "sensor_offset_add", "feedback_step", "feedback_init_spaced", "motor_runtime_read_log",
+                     "command_init", "command_poll", "command_receive_byte", "motor_runtime_stop",
+                     "board_start_serial_receive", "USART2_IRQHandler"]:
             require(re.search(r"^\s*" + name + r"\s+0x080[0-9a-fA-F]+\s+Thumb Code", linked_map, re.M),
                     "generated entry missing from linked image: " + name)
         print("PASS generated clock, all 9 peripheral entries and canonical sensor/feedback entries are linked")
@@ -86,6 +88,15 @@ def main():
                     "sensor/capture test input changed: " + name)
         print("PASS current sensor/capture test source, script, fixture and document hashes")
 
+    command_evidence_file = root / "build/host_command/test_evidence.json"
+    if command_evidence_file.exists():
+        command_evidence = json.loads(command_evidence_file.read_text(encoding="utf-8"))
+        require(command_evidence["result"] == "PASS", "latest command/UART test did not pass")
+        for name, expected_hash in command_evidence["input_sha256"].items():
+            require(hashlib.sha256((root / name).read_bytes()).hexdigest() == expected_hash,
+                    "command/UART test input changed: " + name)
+        print("PASS current command/UART integration and capture input hashes")
+
     provenance = json.loads((firmware / "vendor_sources.json").read_text(encoding="utf-8"))
     for record in provenance["files"]:
         path = (firmware / record["destination"]).resolve()
@@ -107,6 +118,9 @@ def main():
     own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
                   "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md", "docs/m3b3_compact_log.md", "tests/m1/test_telemetry_compact.c")]
+    own_paths += [root / name for name in ("tools/command_link.py", "tools/test_command.py",
+                  "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md",
+                  "tests/m1/test_uart_tc_race.cpp", "tests/m1/uart_model/usart.h", "tests/m1/uart_model/linkage.h")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -124,6 +138,7 @@ def main():
     documents = [root / "README.md", root / "docs/m1_sampling_contract.md", root / "docs/m1_validation.md",
                  root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
                  root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", root / "docs/m3b3_compact_log.md", firmware / "README.md", firmware / "SOURCES.md"]
+    documents += [root / "docs/p1a1_command_link.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

@@ -30,6 +30,7 @@
 #include "board_io.h"
 #include "motor_runtime.h"
 #include "telemetry.h"
+#include "command.h"
   /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -83,6 +84,7 @@ int main(void)
   /* USER CODE BEGIN Init */
   /* 先建立 BOOT 并禁止调制，再运行生成的时钟/外设初始化。 */
   motor_runtime_init();
+  command_init();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -119,9 +121,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    motor_runtime_check_deadline(board_get_time_us());
+    uint32_t now_us = board_get_time_us();
+    motor_runtime_check_deadline(now_us);
     motor_runtime_poll_feedback();
-    telemetry_poll_status(HAL_GetTick());
+    if (!command_poll(now_us)) { telemetry_poll_status(HAL_GetTick()); }
   }
   /* USER CODE END 3 */
 }
