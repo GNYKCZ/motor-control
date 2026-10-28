@@ -119,7 +119,8 @@ def main():
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
                   "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md", "docs/m3b3_compact_log.md", "tests/m1/test_telemetry_compact.c")]
     own_paths += [root / name for name in ("tools/command_link.py", "tools/test_command.py",
-                  "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md")]
+                  "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md",
+                  "tests/m1/test_uart_tc_race.cpp", "tests/m1/uart_model/usart.h", "tests/m1/uart_model/linkage.h")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))

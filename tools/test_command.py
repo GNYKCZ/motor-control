@@ -26,6 +26,7 @@ def main():
     sources += [root / n for n in ("control_core/sensor_input.c", "control_core/feedback.c", "tests/m1/test_command.c")]
     inputs = sources + list((fw / "app").glob("*.h")) + list((fw / "board").glob("*.h"))
     inputs += [root / n for n in ("tests/m1/uart_stub/usart.h", "tools/test_command.py", "tools/command_link.py", "tools/sensor_capture.py", "control_core/feedback.h", "control_core/sensor_input.h")]
+    inputs += [root / n for n in ("tests/m1/test_uart_tc_race.cpp", "tests/m1/uart_model/usart.h", "tests/m1/uart_model/linkage.h")]
     hashes = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     status = subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True)
@@ -64,6 +65,23 @@ def main():
             command += ["-I", directory]
         run(command + sources + ["-lm", "-o", output / "test_command.exe"])
         text = run([output / "test_command.exe"])
+        # RV-001：同一生产ISR用C++寄存器语义模型编译，注入SR读写间硬件到达；不改生产源码。
+        model = root / "tests/m1/uart_model"
+        model_objects = []
+        for source in sources:
+            if source.name in {"board_uart.c", "test_command.c"}:
+                continue
+            obj = output / ("race_" + source.stem + ".o")
+            run(command + ["-c", source, "-o", obj])
+            model_objects.append(obj)
+        cpp = [gcc.parent / "g++.exe", "-std=c++11", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic"]
+        run([gcc.parent / "g++.exe", "--version"])
+        for directory in [model, fw / "board", fw / "app", root / "control_core"]:
+            cpp += ["-I", directory]
+        irq_object = output / "race_board_uart.o"
+        run(cpp + ["-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_uart.c", "-o", irq_object])
+        run(cpp + [root / "tests/m1/test_uart_tc_race.cpp", irq_object, *model_objects, "-lm", "-o", output / "test_uart_tc_race.exe"])
+        run([output / "test_uart_tc_race.exe"])
         stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R1,", "M3B3,")))
         records = [parse_line(line + b"\n") for line in stream.split(b"\n") if line]
         replies = [r for r in records if r["format"] == "P1R1"]
@@ -90,6 +108,7 @@ def main():
                     raise RuntimeError("single-bit reply corruption accepted")
         evidence.update(result="PASS", mixed_records=len(records), rejected_single_bits=rejected,
                         request_bytes=23, reply_bytes=56, oracle="explicit golden strings; CRC-CCITT check 123456789=29B1; Python crc_hqx")
+        evidence["RV-001"] = "PASS: actual ISR with W0C/RMW-arrival model, 23 STOP-byte overlaps, no SR write, TC retention/next-TX clear"
         print("PASS P1a-1 real runtime -> UART -> command -> reply -> capture, errors/priority/backpressure; no hardware")
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         evidence["error"] = str(error)

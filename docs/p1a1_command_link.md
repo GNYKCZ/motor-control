@@ -95,6 +95,17 @@ CRC坏、线断、未接RX或中断无法运行时，串口STOP不能保证停�
 末字节写DR不等于发送完成。回执优先于新周期日志，但不能打断已借用的日志；
 请求洪泛可以使日志饥饿，不能令主循环等待通信。先检查deadline和消费反馈，再做一个通信步骤。
 
+RV-001修正：TC分支仅关闭TCIE并释放缓冲，不再对USART_SR读改写。
+RXNE可由写0清除，陈旧SR值的RXNE=0写回会覆盖读写之间新到达的字节；
+保留TC而关闭TCIE不会继续触发TC中断，下一次TXE路径先读SR再写DR，由硬件清TC。
+既有ST HAL头的清标志说明也记录这一SR读/DR写顺序，参考
+[本项目原字节HAL头](../firmware/stm32f103/Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal_uart.h)。
+新增test_uart_tc_race.cpp用C++寄存器语义模型编译同一生产board_uart.c，
+模拟SR写0清位与读改写间新RX到达，覆盖STOP全部23个字节与TC重叠、保留TC/下次发送清除；
+测试不是重写ISR，也不是板端时序复现。原普通内存替身继续验证其他UART交错，不能单独覆盖这一硬件语义。
+使用相同新模型和旧head `2e839b52395261fa766b5c4f8a2ae18e9092f1f8` 的原UART源离线构建，
+旧实现因STOP未执行而失败，修正后通过；失败证据保存在忽略build/p1a1/rv001_old_uart。
+
 本节是静态工作上界，不是硬件WCET。USART2保持低于ADC/DMA优先级；完整新增路径的实际耗时、
 RX洪泛影响和板端fo均NOT RUN，不能从M3B3原来18us日志数值推定本批耗时。
 
@@ -133,9 +144,11 @@ python tools/command_link.py --command stop --seq 2
 | 帧与CRC | 明写黄金请求/回执、123456789=29B1；184种请求/448种回执单bit破坏 | 主机，非线缆噪声实测 |
 | STOP优先 | 真实UART ISR→command→runtime_stop；TX忙、待STATUS/待STOP、已借用ACK、重复/旧seq、FAULT、嵌套mask | 主机寄存器/门控替身；不模拟实际桥电气状态 |
 | 边界恢复 | 错CRC/前缀/长行+合法尾部、半行、字符与整帧超时、ORE/FE/NE/PE | 真实board_uart ISR；不模拟NVIC延迟 |
+| RV-001寄存器竞态 | 写0清RXNE/TC、SR读写间新字节、23个STOP字节位置；旧实现负向对照 | 同一生产ISR的语义模型，非板端实测 |
 | 时序/快照 | seq/时基回绕、旧now交错、反馈持续推进、故障抢占、冻结快照、同时RXNE+TXE | 真实runtime和通信路径，原反馈门限不变 |
 | 混合流 | runtime→UART→P1R1/M3B3→capture，分块保存和严格解析 | 主机合成来源明确标记，不冒充板端日志 |
 | 工程闭包 | CubeMX再生成、原五组host、命令集成、ARM/正式MDK、严格verify、资源/警告 | 最终SHA和哈希写PR/忽略build证据 |
 
 入口为 `tools/test_command.py --gcc D:/mingw64/bin/gcc.exe`，保留失败证据。
+同一工具目录的g++.exe用于主机寄存器语义模型；目标固件仍全部按C编译，没有引入C++运行时。
 本批到软件审查交付停止；RX物理可达、实际UART IRQ耗时和所有输出测试均未执行。

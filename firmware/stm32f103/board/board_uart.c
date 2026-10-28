@@ -49,7 +49,8 @@ void USART2_IRQHandler(void)
         }
     } else if ((USART2->CR1 & USART_CR1_TCIE)!=0u && (status & USART_SR_TC)!=0u) {
         USART2->CR1 &= ~USART_CR1_TCIE;
-        USART2->SR &= ~USART_SR_TC;
+        /* RV-001：只关TCIE，不对SR读改写。陈旧SR的RXNE=0写回会吞掉新到达字节。
+         * TC保留不再触发IRQ；下一次TXE路径先读SR、再写DR，由硬件清TC。 */
         serial_is_busy=false;
     }
 }
