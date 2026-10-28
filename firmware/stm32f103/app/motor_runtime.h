@@ -39,11 +39,24 @@ typedef struct {
     uint16_t feedback_raw_count; /**< 该估算输入raw，与最新sample可能不同。 */
     uint32_t feedback_overruns; /**< 邮箱满时未能交接的抽帧数；不覆盖未消费输入。 */
     uint32_t feedback_poll_max_us; /**< 有输入的前台反馈处理最大观测墙钟us，含抢占，非WCET。 */
-    uint32_t feedback_step_max_us; /**< feedback_step最大观测墙钟us，含取时/抢占，非WCET。 */
-    uint32_t mailbox_wait_us; /**< 最近取走输入距该ADC完成时刻的us，包含发布前IRQ处理。 */
-    uint32_t mailbox_wait_max_us; /**< 上述等待最大观测值；故障后保留。 */
-    uint32_t mailbox_overrun_us; /**< 邮箱满时两次交接ADC完成时刻之差；故障后保留。 */
+    uint32_t mailbox_wait_max_us; /**< 消费等待或溢出时未消费输入年龄的同一最大值，故障保留。 */
 } motor_status_t;
+
+/** 周期日志专用紧凑快照：只复制本轮验收实际发送的数据，不含double/历史/零偏统计。 */
+typedef struct {
+    motor_runtime_state_t state;
+    uint32_t fault_flags;
+    uint32_t sequence;           /**< 最近ADC完成序号，含失败包，uint32模回绕。 */
+    uint32_t completed_us;       /**< 该ADC完成时刻，1MHz设备时间。 */
+    uint16_t raw_u, raw_v, raw_angle; /**< 原始count；失败包也保留，不冒充名义电流。 */
+    bool sample_is_valid;
+    bool position_is_valid;
+    bool direct_is_valid;        /**< 本轮只观察估算器就绪，不发送/验证速度精度。 */
+    bool window_is_valid;
+    uint32_t feedback_overruns;
+    uint32_t feedback_max_us;    /**< 反馈poll最大观测墙钟，含抢占，非WCET。 */
+    uint32_t mailbox_max_us;     /**< 最大等待/未消费年龄，起点为输入所属ADC完成时刻。 */
+} motor_log_snapshot_t;
 
 /** 前台首次初始化；归零状态，先禁止 PWM，再建立 BOOT；不得在采样启动后重入。 */
 void motor_runtime_init(void);
@@ -67,4 +80,6 @@ void motor_runtime_latch_fault(motor_fault_t fault);
 /** 前台读取完整状态副本到 status；NULL 返回 false，不写内存。
  * 成功返回 true，短临界区内一次复制；调用者不能获得可写的内部状态指针。 */
 bool motor_runtime_read_status(motor_status_t *status);
+/** 直接在短临界区复制小快照；不先读取完整status，不换算、不格式化。 */
+bool motor_runtime_read_log(motor_log_snapshot_t *snapshot);
 #endif

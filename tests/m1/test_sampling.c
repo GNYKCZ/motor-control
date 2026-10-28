@@ -278,10 +278,27 @@ static void test_snapshot_interleaving(void)
     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
     assert(interrupt_mask == 1u);
     interrupt_mask = 0u;
+    assert(!motor_runtime_read_log(NULL));
+    assert(sizeof(motor_log_snapshot_t) <= 48u && sizeof(motor_log_snapshot_t) < sizeof(motor_status_t));
+    printf("PASS compact snapshot size: %u versus full status %u bytes\n",
+        (unsigned)sizeof(motor_log_snapshot_t), (unsigned)sizeof(motor_status_t));
+    start_runtime();
+    motor_runtime_handle_sample(&first);
+    pending_sample = make_sample(2u, 200u);
+    pending_sample.raw_current_u_count = 3333u;
+    has_pending_sample = true;
+    motor_log_snapshot_t old_log, new_log;
+    assert(motor_runtime_read_log(&old_log));
+    assert(motor_runtime_read_log(&new_log));
+    assert(old_log.sequence == 1u && old_log.raw_u == 1234u && old_log.raw_angle == 1u);
+    assert(new_log.sequence == 2u && new_log.raw_u == 3333u && new_log.raw_angle == 2u);
+    interrupt_mask = 1u;
+    assert(motor_runtime_read_log(&new_log) && interrupt_mask == 1u);
+    interrupt_mask = 0u;
     puts("PASS snapshot: interleaved publication is coherent; nested PRIMASK restored");
 }
 
-/** 验证实际导出序号/设备时间/原始量，模拟 UART 长期忙时缓冲不可变且可见跳过次数。 */
+/** 验证实际导出序号/设备时间/原始量，模拟UART长期忙时缓冲不可变且有界放弃。 */
 static void test_telemetry(void)
 {
     start_runtime();
@@ -291,9 +308,9 @@ static void test_telemetry(void)
     assert(!serial_busy);
     send_telemetry(100u);
     assert(serial_busy);
-    assert(strstr(captured_line, "M3B2,s=1,f=0,n=123,t=1000,e=123,es=950,ec=972,") == captured_line);
-    assert(strstr(captured_line, "u=1234,v=2345,a=123,mg=0,ok=1,bad=0,skip=0,") != NULL);
-    assert(strstr(captured_line, "pwm=blocked,power=unverified\r\n") != NULL);
+    assert(strstr(captured_line, "M3B3,s=1,f=0,n=123,t=1000,") == captured_line);
+    assert(strstr(captured_line, "u=1234,v=2345,a=123,ok=1,") != NULL);
+    assert(strcmp(captured_line + strlen(captured_line) - 2u, "\r\n") == 0);
     char saved_line[BOARD_SERIAL_BUFFER_BYTES];
     strcpy(saved_line, borrowed_line);
     for (uint32_t time_ms = 200u; time_ms <= 1000u; time_ms += 100u) {
@@ -302,16 +319,16 @@ static void test_telemetry(void)
     }
     serial_busy = false;
     send_telemetry(1100u);
-    assert(strstr(captured_line, "skip=9,") != NULL);
+    assert(strstr(captured_line, "fo=0,") != NULL);
     serial_busy = false;
     send_telemetry(UINT32_MAX - 49u);
     serial_busy = false;
     send_telemetry(50u); /* 毫秒时间回绕后相隔 100 ms。 */
     assert(serial_busy);
-    puts("PASS telemetry: exact device fields, congestion skip, buffer ownership, time wrap");
+    puts("PASS telemetry: exact device fields, congestion bounded, buffer ownership, time wrap");
 }
 
-/** 真实runtime连续512帧统计；异常不补数，FAULT/满批冻结，前台只发布名义量。 */
+/** 真实runtime连续512帧统计；异常不补数，FAULT/满批冻结，不再在日志中换算名义量。 */
 static void test_offset_candidates(void)
 {
     start_runtime();
@@ -331,8 +348,9 @@ static void test_offset_candidates(void)
     motor_sample_t after=make_sample(513u,51300u);motor_runtime_handle_sample(&after);
     status=read_status();assert(memcmp(&status.estimated_offset,&complete,sizeof(complete))==0);
     serial_busy=false;send_telemetry(1000u);
-    assert(strstr(captured_line,"cn=512,cb=0,ca=0,cd=1,cv=0,ou_mc=2255500,ov_mc=2744500,")!=NULL);
-    assert(strstr(captured_line,"mv=1,iu_mA=-822,iv_mA=-321,ma_mrad=196,scale_nA=805664,")!=NULL);
+    assert(strstr(captured_line,"n=513,t=51300,")!=NULL);
+    assert(strstr(captured_line,"cn=")==NULL);
+    assert(strstr(captured_line,"iu_mA=")==NULL && strstr(captured_line,"ma_mrad=")==NULL);
     // 行为新格式保持原字段含义，且单行最坏数字容量仍小于静态借用缓冲。
     assert(strlen(captured_line)<BOARD_SERIAL_BUFFER_BYTES);
     for(unsigned condition=0;condition<5;++condition){
@@ -349,7 +367,7 @@ static void test_offset_candidates(void)
         status=read_status();assert(status.offset_is_aborted && status.estimated_offset.accepted_count==1u);
         assert(memcmp(&status.estimated_offset,&partial,sizeof(partial))==0);
         assert(!status.calibration_verified && status.state==MOTOR_RUNTIME_FAULT);
-        serial_busy=false;send_telemetry(2000u+condition*100u);assert(strstr(captured_line,"mv=0,iu_mA=0,iv_mA=0,ma_mrad=0,")!=NULL);
+        serial_busy=false;send_telemetry(2000u+condition*100u);assert(strstr(captured_line,"M3B3,s=2,")==captured_line);
     }
     start_runtime();motor_sample_t invalid=make_sample(1u,100u);invalid.is_valid=false;
     motor_runtime_handle_sample(&invalid);motor_sample_t good=make_sample(2u,200u);motor_runtime_handle_sample(&good);
@@ -364,7 +382,7 @@ static void test_offset_candidates(void)
         assert(status.fault_flags & MOTOR_FAULT_FEEDBACK);
         assert(status.offset_is_aborted && status.offset_rejected_count==1 && status.estimated_offset.accepted_count==1);
     }
-    puts("PASS M2c runtime: continuous 512 candidates, freeze on invalid/duplicate/time/fault, no verified calibration, nominal telemetry");
+    puts("PASS M2c runtime: continuous 512 candidates, freeze on invalid/duplicate/time/fault, no verified calibration, compact telemetry without nominal conversion");
 }
 
 /** M3b独立整数轨迹：原始序号与ADC序号错开，完整逐帧交接后核验前台结果。
@@ -400,7 +418,7 @@ static void test_feedback_integration(void)
         if (i == 0u || i == 10u || i == 80u) {
             serial_busy = false;
             send_telemetry(3000u + i * 100u);
-            assert(strstr(captured_line, "M3B2,") == captured_line);
+            assert(strstr(captured_line, "M3B3,") == captured_line);
             puts(captured_line); /* test_m1.py再用真实capture解析器复核完整链路。 */
         }
     }
@@ -445,7 +463,10 @@ static void test_feedback_integration(void)
     final = read_status();
     assert(final.state == MOTOR_RUNTIME_FAULT && final.fault_flags == MOTOR_FAULT_FEEDBACK);
     assert(final.feedback_overruns == 1u && !final.feedback.is_valid);
-    assert(final.mailbox_overrun_us == 1000u);
+    assert(final.mailbox_wait_max_us == 1000u);
+    serial_busy = false; send_telemetry(30000u);
+    assert(strstr(captured_line, "M3B3,s=2,f=8,") == captured_line);
+    assert(strstr(captured_line, "fo=1,fb_us=0,mb_us=1000,") != NULL);
     poll_fresh_feedback();
     assert(!read_status().feedback.is_valid);
 
@@ -518,8 +539,8 @@ static void test_feedback_publish_age(void)
         assert(status.fault_flags & MOTOR_FAULT_FEEDBACK);
         assert(!status.feedback.is_valid && !status.feedback.direct_is_valid && !status.feedback.window_is_valid);
         serial_busy = false; send_telemetry(50000u + condition * 100u);
-        assert(strstr(captured_line, "M3B2,s=2,") == captured_line);
-        assert(strstr(captured_line, "fp=0,fd=0,fw=0,ff=0,") != NULL);
+        assert(strstr(captured_line, "M3B3,s=2,") == captured_line);
+        assert(strstr(captured_line, "fp=0,fd=0,fw=0,") != NULL);
     }
     /* 原始断流门限300us也要在本轮发布时检查，即使反馈年龄尚未达3000us。 */
     for (uint32_t delay = 300u; delay <= 301u; ++delay) {
@@ -557,10 +578,10 @@ static void test_telemetry_scheduling(void)
     clock_read_increment_us = 7u;
     poll_fresh_feedback();
     motor_status_t timed = read_status();
-    assert(timed.feedback_step_max_us == 7u && timed.feedback_poll_max_us == 28u);
+    assert(timed.feedback_poll_max_us == 14u);
     serial_busy = false;
     uint32_t sequence = 1u;
-    for (unsigned part = 0u; part < 14u; ++part) {
+    for (unsigned part = 0u; part < 17u; ++part) {
         for (unsigned tick = 0u; tick < 2u; ++tick) {
             sequence++;
             motor_sample_t sample = make_sample(sequence, sequence * 100u);
@@ -568,14 +589,14 @@ static void test_telemetry_scheduling(void)
         }
         poll_fresh_feedback();
         telemetry_poll_status(100000u);
-        assert(serial_busy == (part == 13u)); /* 一次poll不能吞掉后续格式步骤。 */
+        assert(serial_busy == (part == 16u)); /* 一次poll不能吞掉后续格式步骤。 */
         assert(read_status().state == MOTOR_RUNTIME_DISABLED && !read_status().feedback_overruns);
     }
-    assert(sequence == 29u);
-    assert(strstr(captured_line, "M3B2,s=1,f=0,n=3,t=300,e=3,") == captured_line);
-    assert(strstr(captured_line, "cn=3,") != NULL); /* 同行各段始终是准备时那份快照。 */
-    assert(strstr(captured_line, "fe=1,ft=72,fr=1,") != NULL);
-    assert(strstr(captured_line, "fb_poll_us=28,fb_step_us=7,") != NULL);
+    assert(sequence == 35u);
+    assert(strstr(captured_line, "M3B3,s=1,f=0,n=3,t=300,") == captured_line);
+    assert(strstr(captured_line, "u=1234,v=2345,a=3,ok=1,fp=1,fd=0,fw=0,") != NULL); /* 同行各段始终是准备时那份快照。 */
+    assert(strstr(captured_line, "fe=") == NULL);
+    assert(strstr(captured_line, "fb_us=14,") != NULL);
     char held[BOARD_SERIAL_BUFFER_BYTES]; strcpy(held, borrowed_line);
     for (unsigned tick = 0u; tick < 20u; ++tick) {
         sequence++;
@@ -592,14 +613,14 @@ static void test_telemetry_scheduling(void)
     motor_sample_t bad = make_sample(sequence, sequence * 100u); bad.is_valid = false;
     motor_runtime_handle_sample(&bad);
     assert(read_status().state == MOTOR_RUNTIME_FAULT);
-    for (unsigned part = 1u; part < 14u; ++part) { telemetry_poll_status(100200u); }
-    assert(serial_busy && strstr(captured_line, "M3B2,s=1,f=0,") == captured_line);
+    for (unsigned part = 1u; part < 17u; ++part) { telemetry_poll_status(100200u); }
+    assert(serial_busy && strstr(captured_line, "M3B3,s=1,f=0,") == captured_line);
     serial_busy = false; send_telemetry(100300u);
-    assert(strstr(captured_line, "M3B2,s=2,") == captured_line);
+    assert(strstr(captured_line, "M3B3,s=2,") == captured_line);
     assert(strstr(captured_line, "fp=0,fd=0,fw=0,") != NULL);
-    assert(strstr(captured_line, "tp0_us=7,tp1_us=7,tp2_us=7,") != NULL);
-    assert(strstr(captured_line, "tp13_us=7,") != NULL);
-    assert(read_status().feedback_step_max_us == 7u); /* 故障失效不擦除耗时证据。 */
+    assert(strstr(captured_line, "log_us=7,log_id=0") != NULL);
+    assert(strstr(captured_line, "tp13_us=") == NULL);
+    assert(read_status().feedback_poll_max_us == 14u); /* 故障失效不擦除耗时证据。 */
     clock_read_increment_us = 0u;
     puts("PASS M3b scheduling: fixed format slices, intervening raw frames, frozen snapshot, backpressure/fault, retained timing");
 }
@@ -615,21 +636,21 @@ static void test_timing_wrap(void)
     device_now_us = UINT32_MAX - 5u; clock_read_increment_us = 7u;
     motor_runtime_poll_feedback();
     motor_status_t status = read_status();
-    assert(status.feedback.is_valid && status.mailbox_wait_us == 95u && status.mailbox_wait_max_us == 95u);
-    assert(status.feedback_step_max_us == 7u && status.feedback_poll_max_us == 28u);
+    assert(status.feedback.is_valid && status.mailbox_wait_max_us == 95u);
+    assert(status.feedback_poll_max_us == 14u);
     for (uint32_t i = 1u; i <= 10u; ++i) {
         sample = make_sample(41u + i, UINT32_MAX - 100u + i * 100u);
         motor_runtime_handle_sample(&sample);
     }
     device_now_us = sample.current_completed_us + 50u;
     motor_runtime_poll_feedback(); status = read_status();
-    assert(status.feedback.is_valid && status.mailbox_wait_us == 50u && status.mailbox_wait_max_us == 95u);
+    assert(status.feedback.is_valid && status.mailbox_wait_max_us == 95u);
     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); status = read_status();
-    assert(!status.feedback.is_valid && status.mailbox_wait_max_us == 95u && status.feedback_step_max_us == 7u);
+    assert(!status.feedback.is_valid && status.mailbox_wait_max_us == 95u && status.feedback_poll_max_us == 14u);
     clock_read_increment_us = 0u;
     motor_runtime_init(); status = read_status();
-    assert(status.mailbox_wait_max_us == 0u && status.feedback_step_max_us == 0u);
-    puts("PASS timing observations: uint32 wrap, independent 7us clock, last/max waits, fault retention and init reset");
+    assert(status.mailbox_wait_max_us == 0u && status.feedback_poll_max_us == 0u);
+    puts("PASS timing observations: uint32 wrap, independent 7us clock, aggregate max wait, fault retention and init reset");
 }
 
 /** 主机入口；断言失败立即非零退出，全部通过才打印最终结果。 */
