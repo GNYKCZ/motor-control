@@ -19,7 +19,7 @@ def capture_session(connection, output, metadata, before=2.0, after=2.0, status_
         raise FileExistsError("output already exists")
     frame = make_command(status_seq, "status") if status_seq is not None else None
     result = {"status_requested": frame is not None, "write_attempted": False,
-              "write_completed": False, "received_bytes": 0, "error": None}
+              "write_completed": False, "write_report": "not_attempted", "received_bytes": 0, "error": None}
     start = clock()
     events = []
     owned_output = False
@@ -33,13 +33,21 @@ def capture_session(connection, output, metadata, before=2.0, after=2.0, status_
         while (frame is not None and not result["write_attempted"]) or clock() < end:
             if frame is not None and not result["write_attempted"] and clock() - start >= before:
                 result["write_attempted"] = True  # 写入异常/部分写入也不重试。
+                result["write_report"] = "unknown"
                 event = {"operation": "write", "rx_offset": result["received_bytes"],
-                         "tx_offset": 0, "requested_length": len(frame), "raw_hex": frame.hex(),
+                         "tx_offset": 0, "requested_length": len(frame), "requested_hex": frame.hex(),
+                         "length": None, "reported_written_hex": None, "write_report": "unknown",
                          "started_monotonic": clock()}
                 events.append(event)
                 try:
                     count = connection.write(frame)
+                    if type(count) is not int or not 0 <= count <= len(frame):
+                        raise RuntimeError("invalid write count; actual prefix unknown; no retry")
                     event["length"] = count
+                    # RV-002：只记录接口报告的前缀；不是电线上已实际送达的字节证明。
+                    event["reported_written_hex"] = frame[:count].hex()
+                    event["write_report"] = "complete" if count == len(frame) else "partial"
+                    result["write_report"] = event["write_report"]
                     result["write_completed"] = count == len(frame)
                     if count != len(frame):
                         raise RuntimeError("partial STATUS write; no retry")

@@ -9,13 +9,14 @@ from session_probe import capture_session
 
 
 class FakePort:
-    def __init__(self, chunks, partial=False, first_read_delay=0.05):
+    def __init__(self, chunks, partial=False, first_read_delay=0.05, write_error=False):
         self.chunks = iter(chunks)
         self.now = 100.0
         self.writes = []
         self.partial = partial
         self.first_read_delay = first_read_delay
         self.read_count = 0
+        self.write_error = write_error
 
     def clock(self):
         return self.now
@@ -28,6 +29,8 @@ class FakePort:
 
     def write(self, data):
         self.writes.append((self.now, bytes(data)))
+        if self.write_error:
+            raise RuntimeError("injected write failure; transmitted count unknown")
         return 5 if self.partial else len(data)
 
 
@@ -38,8 +41,8 @@ def main():
     samples = [b"M", b"P1R1,00000001,01,00,01,00000000,00000019,000009C4,0F49\r\n",
                b"P1R1,00000001,01,00,01,00000000,00000019,000009C4,0F49\r\n", b"tail"]
     results = []
-    for mode in ("passive", "status", "partial"):
-        port = FakePort(samples, mode == "partial")
+    for mode in ("passive", "status", "partial", "exception"):
+        port = FakePort(samples, mode == "partial", write_error=mode == "exception")
         output = Path(tempfile.mkdtemp(prefix=mode + "_", dir=dest)) / "capture"
         failed = False
         try:
@@ -47,7 +50,7 @@ def main():
                             clock=port.clock)
         except RuntimeError:
             failed = True
-        assert failed == (mode == "partial")
+        assert failed == (mode in {"partial", "exception"})
         assert (output / "raw.bin").read_bytes() == b"".join(samples)
         events = [json.loads(line) for line in (output / "events.jsonl").read_text().splitlines()]
         offset = 0
@@ -56,7 +59,19 @@ def main():
             assert event["rx_offset"] == offset
             if event["operation"] == "read":
                 offset += event["length"]
+            else:
+                assert event["requested_length"] == 23
+                assert bytes.fromhex(event["requested_hex"]) == b"P1C1,00000001,01,A1E6\r\n"
+                assert "raw_hex" not in event  # 整帧意图不得再冒充实际写入。
+                expected = {"status": (23, "complete"), "partial": (5, "partial"), "exception": (None, "unknown")}[mode]
+                assert (event["length"], event["write_report"]) == expected
+                assert event["reported_written_hex"] == (None if mode == "exception" else b"P1C1,00000001,01,A1E6\r\n"[:expected[0]].hex())
         assert offset == len(b"".join(samples))
+        summary = json.loads((output / "session_result.json").read_text())
+        assert summary["write_report"] == {"passive": "not_attempted", "status": "complete",
+                                            "partial": "partial", "exception": "unknown"}[mode]
+        assert summary["write_completed"] == (mode == "status")
+        assert bool(summary["error"]) == (mode in {"partial", "exception"})
         if mode == "passive":
             assert not port.writes
         else:
@@ -96,7 +111,7 @@ def main():
         "source_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in
          ["tools/session_probe.py", "tools/command_link.py", "tools/sensor_capture.py", "tests/m1/test_session_probe.py"]},
         "hardware": "NOT RUN"}, indent=2) + "\n", encoding="utf-8")
-    print("PASS passive=0 writes; explicit STATUS once after2s; partial write no retry; raw/offset/timing/strict parse/existing directory")
+    print("PASS passive/STATUS/partial/exception; RV-001 delayed read; RV-002 requested vs reported/unknown bytes; no retry or hardware")
 
 
 if __name__ == "__main__":

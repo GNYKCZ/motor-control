@@ -31,10 +31,14 @@ DTR/RTS在开口前设低，但具体DAP仍可能有开口控制线效应；记�
 
 输出包含raw.bin、records.jsonl、metadata.json，以及：
 
-- events.jsonl：每次read/write的started/finished_monotonic、请求与实际长度、操作前rx_offset。
-  rx_offset是原始接收流的0基偏移，空read长度0也保留；write另记tx_offset=0和实际发送hex。
+- events.jsonl：每次read/write的started/finished_monotonic、请求长度与返回长度、操作前rx_offset。
+  rx_offset是原始接收流的0基偏移，空read长度0也保留。write另记tx_offset=0，
+  requested_hex始终为请求的23B整帧；length是接口返回计数，reported_written_hex仅为该计数对应的前缀。
+  返回23时write_report=complete，返回5时为partial且仅记录5B前缀；异常/无有效计数时为unknown，
+  length与reported_written_hex均为null，不能把未知当0或整帧已发送。
 - session_result.json：是否明确要求STATUS、是否尝试/完成一次写入、总接收字节、异常。
   部分写入/异常不重发；没有完整回执也不改成成功。
+  write_completed只代表接口报告整帧写入，不证明字节已上电线或板端收到；未知状态另见write_report。
 
 电脑单调时间只能界定系统调用前后，不能当作USB包或MCU字节到达时间。
 read(256)返回边界也不是USB64B包的直接观测；偏移只能用于关联，不能据此单独确诊DAP。
@@ -46,5 +50,6 @@ read(256)返回边界也不是USB64B包的直接观测；偏移只能用于关�
 原字节/offset/时间对应、坏行不修饰、现有输出目录不覆盖。
 RV-001回归另用首次read延迟5秒跨过默认4秒总期限：显式模式仍恰好一次STATUS并继续2秒，
 被动模式仍为0次写入；旧版本会静默不发送，已留离线失败对照证据。
+RV-002回归覆盖完整23B、部分5B、写入异常：分别核对整帧意图与接口报告前缀/未知值，均不重试。
 证据在build/session_probe_test/evidence.json。工具只新增主机Python与文档，固件/IOC/MDK未改，
 目标固件构建为NOT APPLICABLE；板端实际使用NOT RUN。取得证据后由Design决定是否安排现场使用。
