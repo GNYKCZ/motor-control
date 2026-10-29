@@ -105,6 +105,8 @@ typedef struct { uint32_t id, requested_us, started_us, ended_us; motor_action_r
 bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
+/** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */
+bool motor_runtime_output_deadline_reached(uint32_t now_us);
 /** UART错误/格式/CRC/超时：仅ARMED/STARTING/ACTIVE锁存通信故障并先停。 */
 void motor_runtime_communication_error(void);
 /** IRQ 故障入口：先禁止 PWM，再锁存非零 fault；不清故障，不使能输出。 */

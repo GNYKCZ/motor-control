@@ -308,6 +308,12 @@ bool motor_runtime_commit_output(uint32_t generation)
     return true;
 }
 
+bool motor_runtime_output_deadline_reached(uint32_t now_us)
+{
+    return (runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
+        && (int32_t)(now_us-pulse_deadline_us)>=0;
+}
+
 void motor_runtime_handle_sample(const motor_sample_t *sample)
 {
     uint32_t previous_mask = board_enter_critical();

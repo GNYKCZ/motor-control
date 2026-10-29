@@ -105,12 +105,17 @@ void TIM1_CC_IRQHandler(void)
         if (pending_phase==2u) {
             pending_phase=0u;
             if (board_output_is_ready() && in_start_window()
-                && motor_runtime_commit_output(pending_generation) && in_start_window()) {
+                && motor_runtime_commit_output(pending_generation) && in_start_window()
+                && !motor_runtime_output_deadline_reached(board_get_time_us())) {
                 TIM1->BDTR |= TIM_BDTR_MOE;
                 uint32_t opened_us=board_get_time_us();
                 motor_runtime_record_gate(true,opened_us);
                 /* 短Break可能发生在最终检查与MOE写之间，低窗内再次检查，禁止陈旧事务重开。 */
-                if (!board_output_is_ready() || !in_start_window()) {
+                bool invalid_window=!board_output_is_ready() || !in_start_window();
+                uint32_t checked_us=board_get_time_us();
+                if (motor_runtime_output_deadline_reached(checked_us)) {
+                    motor_runtime_check_deadline(checked_us);
+                } else if (invalid_window) {
                     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
                 }
             } else { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); }

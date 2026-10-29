@@ -13,6 +13,7 @@ static uint32_t active_ticks[3];
 static bool fixed_angle, delay_after_moe;
 static uint16_t fixed_count;
 static unsigned access_count,inject_at,inject_kind,enables,early_enables,ug_writes;
+static uint32_t forced_deadline;
 static bool injecting,queued_stop,trace;
 
 static void natural_update()
@@ -32,6 +33,7 @@ void pwm_model_access(unsigned, bool)
         pwm_tim1.BDTR.value&=~TIM_BDTR_MOE; pwm_tim1.SR.value|=TIM_SR_BIF;
     }
     if (inject_kind==3u) { queued_stop=true; }
+    if (inject_kind==4u) { now_us=forced_deadline; }
     injecting=false;
 }
 
@@ -173,6 +175,21 @@ int main()
     still_ready();button_steps(true,21u);button_steps(false,21u);delay_after_moe=true;open_window();
     check_closed();CHECK(enables==1u && status().state==MOTOR_RUNTIME_FAULT);
     CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_FAULT && action.timing_flags==0xc0u);
+    // RV-001：在CC开门路径的每个寄存器访问点跨过绝对期限，不能保留ACTIVE或残留重开。
+    still_ready();button_steps(true,21u);button_steps(false,21u);
+    natural_update();TIM1_UP_IRQHandler();pwm_tim1.CNT.value=1049u;pwm_tim1.SR.value|=TIM_SR_CC4IF;
+    trace=true;access_count=0u;TIM1_CC_IRQHandler();trace=false;unsigned deadline_points=access_count;
+    for (unsigned at=1u;at<=deadline_points;++at) {
+        still_ready();button_steps(true,21u);button_steps(false,21u);
+        CHECK(motor_runtime_read_reply(&log,&action));forced_deadline=action.requested_us+4000u;
+        for (unsigned i=0u;i<39u;++i) { now_us+=100u;sample(); }
+        now_us=forced_deadline-1u;
+        natural_update();TIM1_UP_IRQHandler();pwm_tim1.CNT.value=1049u;pwm_tim1.SR.value|=TIM_SR_CC4IF;
+        trace=true;inject_kind=4u;inject_at=at;access_count=0u;TIM1_CC_IRQHandler();trace=false;
+        check_closed();CHECK(status().state!=MOTOR_RUNTIME_ACTIVE);
+        CHECK(motor_runtime_read_reply(&log,&action) && (action.timing_flags & 0x40u));
+        unsigned prior=enables;open_window();CHECK(enables==prior);check_closed();
+    }
     still_ready();button_steps(true,21u);motor_runtime_stop();button_steps(false,21u);
     open_window();CHECK(enables==0u && status().state==MOTOR_RUNTIME_DISABLED);
     CHECK(motor_runtime_read_reply(&log,&action) && action.id==0u);
