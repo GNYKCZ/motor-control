@@ -64,7 +64,9 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
     board_prepare_output_idle();
     TIM1->CCR1=ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
     largest_tick=(uint16_t)maximum; window_margin=ticks.margin_ticks;
-    TIM1->CCR4=(maximum+TIM1->ARR)/2u;
+    /* 在同一允许窗口的首个tick发比较事件，为IRQ进入/资格复核留出余量。
+     * 不改变窗口边界；迟到仍拒绝，本次请求不等下一圈重试。 */
+    TIM1->CCR4=maximum+ticks.margin_ticks+1u;
     pending_generation=generation;
     /* 写入间自然UEV可出现：MOE0。清旧UIF后只认下一次UEV，确保全部预装值已转移。 */
     TIM1->SR=~TIM_SR_UIF;
