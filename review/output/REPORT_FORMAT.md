@@ -45,6 +45,6 @@
 
 列遗留风险、未覆盖项、返工轮次和下一负责角色。发布前核对 base/head；新提交后旧报告仅作历史证据。建议合并不等于执行合并的授权，不等于硬件运行许可。
 
-按已核实的人类交接授权，每次结论同时发送Work与Design（PASS/PASS WITH LIMITATIONS/FAIL/INCONCLUSIVE均包括），
-记录两个目标和实际发送状态。普通Finding直接由Work核查修复后回原Review；需要范围/接口/物理语义决策才请Design介入。
+按已核实的人类交接授权，每次结论只发送Work（PASS/PASS WITH LIMITATIONS/FAIL/INCONCLUSIVE均包括），
+记录Work目标和实际发送状态，不抄送Design。普通Finding由Work核查修复后直接回原Review；重大问题由Work向用户提出影响和选项，用户决定是否重启Design。
 未审完继续完成；证据确实不可得才给相应结论，不能等待Design转发或重派。合并权限单列，不从APPROVE推断授权。

@@ -66,7 +66,8 @@ bug 修复应保留能区分旧错行为的回归测试；不能安全运行旧�
 - Review 只读，先找候选再尝试证伪；确认问题必须有 Trigger、Evidence、Impact、违反的契约和可观察验收。
 - Work 重新验证 Finding，使用 `Fixed / Rejected / Already resolved / Superseded / Follow-up required / Blocked`，不机械照抄建议；修复后保留 RV ID 并复审。
 - 证据绑定被测SHA；本地未提交修改参与运行必须披露。新head须独立复审，不能继承旧整体PASS；按风险和修复diff增量复核，输入哈希/配置/工具/环境未变且适用的旧构建证据可明确引用复用，base变化需复核差异。
-- Work直接交Review并抄送Design简报；Review每次结论（含PASS）同时通知Work和Design。普通Finding由Work核查修复后直接回原Review，不经Design转发；Design负责范围、接口/物理语义决策和用户汇报。沿用已核实的人类授权与角色映射，模板本身不新增发送权限。
+- Design只负责起始目标/范围/架构/验收并一次性交Work；之后Work直接交Review，Review每次结论（含PASS/FAIL/INCONCLUSIVE）只通知Work。普通Finding由Work核查修复后直接回原Review，不抄送Design；Work负责向用户交付与合并审批。沿用已核实的人类授权与角色映射，模板本身不新增发送权限。
 - Review尚未审完应继续完成，不以自身进度未完成等待Design重派；真正证据不可得仍报告INCONCLUSIVE与补证据方式，不放宽独立审查/有效Finding/硬件事实边界。
+- 只有确认修复需大范围重构、改变既定公共接口/控制或物理语义/架构、超出授权或重大无解障碍时，Work暂停受影响修改，向用户提出证据、具体影响和选项，由用户决定是否重启Design。普通bug、补测试和局部修改不一律升级；无关已授权部分可继续。三轮到限仍向用户报告，不绕过保护。审查评论发布和合并须分别获授权，不从路由授权推断。
 - 自审不能冒充独立审查；多人/多模型意见一致不能替代证据。默认自动返工最多三轮，重复或过期交接不重复执行。
 - 完成报告说明修改、实际验证/未运行项、接口影响、PR/commit 真实状态和剩余限制。Confidence 是主观标记，不是校准概率。

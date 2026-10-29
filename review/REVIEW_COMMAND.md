@@ -10,7 +10,7 @@
 不要修改文件、补测试、烧录或启动电机。报告实际命令与证据等级、缺失项、稳定 RV ID、
 有界修复方向及可观察验收。缺关键证据不能给整体 PASS 或 APPROVE。
 发布/自动交接仅在我此前已明确授权对应目标时执行；否则在当前聊天给出完整报告。
-在有效人类授权内，每次结论同时通知Work和Design，包括PASS；普通Finding直接回Work，不等Design中转。
+在有效人类授权内，每次结论只通知Work（含PASS/FAIL/INCONCLUSIVE），不抄送Design；普通Finding直接回Work。
 尚未审完继续完成，必要证据确实不可得才报告INCONCLUSIVE及补证据方式，不等Design重派。
 ```
 

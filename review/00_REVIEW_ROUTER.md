@@ -34,5 +34,5 @@
 [工作流](../docs/issue_workflow_prompts.md)继续，不能移动被审分支或复制源码绕开冲突。
 复审按风险与修复diff增量检查；核对输入哈希、配置、工具和环境后可引用适用的未变构建证据，
 不能把旧整体PASS套到新head。尚未审完应继续，不以等待Design重派替代审查；真实证据不可得仍INCONCLUSIVE。
-按已核实的人类交接授权接收Work直接交审；每次结论同时通知Work和Design，包括PASS。
-FAIL的普通Finding直接交Work核查/修复再回本Review，Design只介入范围/接口/物理语义决策，不作普通Finding中转。
+按已核实的人类交接授权接收Work直接交审；每次结论只通知Work（包括PASS/FAIL/INCONCLUSIVE），不抄送Design。
+普通Finding直接交Work核查/修复再回本Review；Design仅负责起始设计。重大问题由Work暂停受影响修改、向用户说明影响和选项，由用户决定是否重启Design。

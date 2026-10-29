@@ -57,7 +57,7 @@ ARM/PULSE明确拒绝；用户已有一次COM9的STATUS严格匹配回执，开�
 ## AI 协作与审查
 
 - [工程约定](AGENTS.md)：开发边界、验证矩阵和硬件操作要求。
-- [Issue 工作流与可复制提示词](docs/issue_workflow_prompts.md)：按授权工作包连续推进；Work直接交Review并抄送Design，Review每次结论同时回传两方，范围内修复直接闭环。包括授权、评审工作树隔离和停止条件。
+- [Issue 工作流与可复制提示词](docs/issue_workflow_prompts.md)：按授权工作包连续推进；Design起始设计后一次性交Work，Work直接交Review，Review结论只回Work，范围内修复直接闭环，Work向用户交付。包括授权、评审工作树隔离和停止条件。
 - [Review 包](review/README.md)：按固件、仿真、实验分别加载检查项。
 - [迁移依据与研究参考](docs/ai_review_basis.md)：源仓库版本、2026 年研究启发、采用方式及限制。
 
