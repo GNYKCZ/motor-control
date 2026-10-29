@@ -57,6 +57,22 @@ def main():
             exe = output / (tag + ".exe")
             run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
             run([exe])
+            if not synthetic:
+                # 原真实board实现+新推进时钟回归：旧比较点不能通过同一压力场景。
+                baseline = output / "window_old_board.cpp"
+                baseline.write_bytes(subprocess.check_output(["git", "show",
+                    "35fc2209b24edb0abe11e4df55ad4e9e1ffe3cba:firmware/stm32f103/board/board_pwm.c"], cwd=root))
+                old_board = output / "window_old_board.o"
+                run([*cpp, "-include", model / "linkage.h", "-c", baseline, "-o", old_board])
+                old_exe = output / "window_old.exe"
+                run([*cpp, root / "tests/m1/test_pwm_gate.cpp", old_board, *objects, "-lm", "-o", old_exe])
+                old_result = subprocess.run([str(old_exe)], cwd=root, env=environment, capture_output=True,
+                                            text=True, timeout=30)
+                if old_result.returncode == 0 or "state==MOTOR_RUNTIME_ACTIVE && enables==1u" not in old_result.stderr:
+                    raise RuntimeError("advancing-clock regression did not reject old compare scheduling")
+                evidence["window_old_negative"] = {"returncode": old_result.returncode,
+                    "output": old_result.stdout + old_result.stderr,
+                    "board_sha256": hashlib.sha256(baseline.read_bytes()).hexdigest()}
         # RV-001反例：在Break处理后故意留下MOE，旧测试补救STOP会洗掉，新测试必须当场失败。
         # 只改变测试夹具的模拟寄存器，不改生产board/runtime/command，也不宣称真实固件有此缺陷。
         old = subprocess.check_output(["git", "show", "77e27db1c4f9aeb5109a610962707943de9fe94b:tests/m1/test_pwm_gate.cpp"], cwd=root).decode("utf-8")

@@ -15,6 +15,22 @@ static uint16_t fixed_count;
 static unsigned access_count,inject_at,inject_kind,enables,early_enables,ug_writes;
 static uint32_t forced_deadline;
 static bool injecting,queued_stop,trace;
+static unsigned advancing_ticks, fraction_ticks;
+
+/** 独立压力时钟：访问耗时是显式测试输入，不是MCU测得周期。CNT和设备us一起推进。 */
+static void advance_timer(unsigned ticks)
+{
+    for (unsigned i=0u;i<ticks;++i) {
+        if (++fraction_ticks==72u) { fraction_ticks=0u; ++now_us; }
+        if (pwm_tim1.CR1.value & TIM_CR1_DIR) {
+            if (pwm_tim1.CNT.value>0u) { --pwm_tim1.CNT.value; }
+            if (pwm_tim1.CNT.value==0u) { pwm_tim1.CR1.value &= ~TIM_CR1_DIR; }
+        } else {
+            ++pwm_tim1.CNT.value;
+            if (pwm_tim1.CNT.value>=pwm_tim1.ARR.value) { pwm_tim1.CR1.value |= TIM_CR1_DIR; }
+        }
+    }
+}
 
 static void natural_update()
 {
@@ -24,6 +40,7 @@ static void natural_update()
 
 void pwm_model_access(unsigned, bool)
 {
+    if (advancing_ticks) { advance_timer(advancing_ticks); }
     if (!trace || injecting) { return; }
     ++access_count;
     if (access_count!=inject_at) { return; }
@@ -62,7 +79,7 @@ void board_leave_critical(uint32_t old)
     mask=old;
     if (!mask && queued_stop) { queued_stop=false; motor_runtime_stop(); }
 }
-uint32_t board_get_time_us(void) { uint32_t old=now_us;now_us+=clock_step;return old; }
+uint32_t board_get_time_us(void) { if (advancing_ticks) { advance_timer(36u); } uint32_t old=now_us;now_us+=clock_step;return old; }
 bool board_serial_is_busy(void) { return true; }
 bool board_start_serial_write(const char *,uint32_t) { return false; }
 
@@ -83,6 +100,7 @@ static void sample(bool poll=true)
 static void reset(uint32_t base=0u)
 {
     trace=false;inject_at=0u;inject_kind=0u;access_count=0u;queued_stop=false;mask=0u;
+    advancing_ticks=0u;fraction_ticks=0u;
     fixed_angle=false; delay_after_moe=false; fixed_count=0u;
     clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
     pwm_tim1.BDTR.value=TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR;
@@ -133,6 +151,20 @@ int main()
     (void)timer_tick; (void)button_steps; (void)still_ready;
     reset();
 #ifndef MOTOR_GATE_TEST_PROFILES
+    // 比较事件+300tick进入延迟，每次寄存器访问4tick、取时36tick的明确压力场景。
+    // 从实际CCR4起算，不把CNT固定在一个永不消失的窗口中。
+    still_ready();button_steps(true,21u);button_steps(false,21u);
+    natural_update();TIM1_UP_IRQHandler();
+    pwm_tim1.CNT.value=pwm_tim1.CCR4.value;advance_timer(300u);
+    pwm_tim1.SR.value|=TIM_SR_CC4IF;advancing_ticks=4u;TIM1_CC_IRQHandler();advancing_ticks=0u;
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u && early_enables==0u);
+    motor_runtime_stop();check_closed();
+    // 更晚进入仍必须拒绝，不能靠提前比较放宽窗口或延长请求。
+    still_ready();button_steps(true,21u);button_steps(false,21u);
+    natural_update();TIM1_UP_IRQHandler();pwm_tim1.CNT.value=1400u;
+    pwm_tim1.SR.value|=TIM_SR_CC4IF;advancing_ticks=4u;TIM1_CC_IRQHandler();advancing_ticks=0u;
+    check_closed();CHECK(status().fault_flags & MOTOR_FAULT_START_WINDOW);
+    reset();
     CHECK(motor_runtime_output_profile_count()==1u);
     open_window();check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
     // 生产profile不可经API调用，只有原始PA12电平的新完整手势可到达。
