@@ -57,6 +57,25 @@ def main():
             exe = output / (tag + ".exe")
             run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
             run([exe])
+        # RV-001反例：在Break处理后故意留下MOE，旧测试补救STOP会洗掉，新测试必须当场失败。
+        # 只改变测试夹具的模拟寄存器，不改生产board/runtime/command，也不宣称真实固件有此缺陷。
+        old = subprocess.check_output(["git", "show", "77e27db1c4f9aeb5109a610962707943de9fe94b:tests/m1/test_pwm_gate.cpp"], cwd=root).decode("utf-8")
+        current = (root / "tests/m1/test_pwm_gate.cpp").read_text(encoding="utf-8")
+        anchor = "if (kind==2u) { TIM1_BRK_IRQHandler(); }"
+        oracle = {}
+        for label, source in (("old", old), ("fixed", current)):
+            if source.count(anchor) != 1:
+                raise RuntimeError("RV-001 negative fixture anchor mismatch")
+            fixture = output / ("rv001_" + label + ".cpp")
+            fixture.write_text(source.replace(anchor, anchor + " if (kind==2u) { pwm_tim1.BDTR.value |= TIM_BDTR_MOE; }"), encoding="utf-8")
+            exe = output / ("rv001_" + label + ".exe")
+            run([*cpp, fixture, board, *objects, "-lm", "-o", exe])
+            result = subprocess.run([str(exe)], cwd=root, env=environment, capture_output=True, text=True, timeout=30)
+            oracle[label] = {"returncode": result.returncode, "output": result.stdout + result.stderr,
+                             "fixture_sha256": hashlib.sha256(fixture.read_bytes()).hexdigest()}
+        if oracle["old"]["returncode"] != 0 or oracle["fixed"]["returncode"] == 0 or "BDTR.value & TIM_BDTR_MOE" not in oracle["fixed"]["output"]:
+            raise RuntimeError("RV-001 negative control did not distinguish old and fixed assertions")
+        evidence["RV-001"] = oracle
         negative = subprocess.run([str(gcc), "-std=c11", *map(str, flags), "-DMOTOR_GATE_TEST_PROFILES",
                                    "-D__arm__", "-fsyntax-only", str(fw / "app/motor_runtime.c")],
                                   cwd=root, env=environment, capture_output=True, text=True, timeout=30)

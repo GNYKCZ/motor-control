@@ -129,7 +129,18 @@ int main()
             reset();CHECK(motor_runtime_arm(1u));trace=true;inject_at=at;inject_kind=kind;
             (void)motor_runtime_pulse();open_window();trace=false;
             if (kind==2u) { TIM1_BRK_IRQHandler(); }
-            motor_runtime_stop();open_window();check_closed();
+            if (kind==2u || kind==3u) {
+                /* RV-001：这里没有补救STOP；必须直接观察交错本身的撤销结果。 */
+                if (kind==2u) { CHECK(status().state==MOTOR_RUNTIME_FAULT && (status().fault_flags & MOTOR_FAULT_DEVICE)); }
+                else { CHECK(!queued_stop && status().state!=MOTOR_RUNTIME_STARTING && status().state!=MOTOR_RUNTIME_ACTIVE); }
+                check_closed();
+                unsigned before=enables;
+                open_window();open_window();TIM1_UP_IRQHandler();TIM1_CC_IRQHandler();TIM1_BRK_IRQHandler();
+                CHECK(enables==before);check_closed();
+            } else {
+                /* 自然UEV不是撤销事件，单独清理此条正常请求。 */
+                motor_runtime_stop();open_window();check_closed();
+            }
         }
     }
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());

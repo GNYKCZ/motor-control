@@ -58,6 +58,11 @@ python -B tools/verify_m1.py
 `build/p1a2a/`下目标/MDK/最终汇总，以及`build/cubemx_*/regeneration_evidence.json`。
 失败尝试保留在各验证目录，不以单次PASS替代独立Review。最终PR列被测完整SHA、资源与实际检查结果。
 
+RV-001复审修正：Break已处理/排队STOP已线性化后，在任何测试补救STOP之前检查状态与MOE/GPIO，
+再投递残留更新/比较及重复IRQ，确认没有新增MOE使能。自然UEV分支独立清理，不能混作撤销证明。
+负向对照只在测试夹具中故意留下Break后的MOE：旧head的测试被末尾STOP洗掉而通过，
+新断言立即失败；生产board/runtime/command保持相同。这证明测试能发现所述缺口，不证明实际固件存在该缺陷。
+
 ## 本批板端观察/停止清单（未执行）
 
 本轮禁止COM9、下载、上12V、运行PWM。若用户后续安排只采样验证：
