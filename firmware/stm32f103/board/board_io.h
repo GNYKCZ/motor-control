@@ -1,5 +1,5 @@
 /** 板级入口：使用生成的外设配置，拥有 DMA 私有缓冲和串口发送状态，runtime 不直接操作设备。
- * 主函数负责初始化/前台串口；中断负责完成帧发布。所有接口均不使能功率 PWM。 */
+ * 主函数负责初始化/前台串口；中断负责完成帧发布。生产profile为空，外部命令不能使能PWM。 */
 #ifndef BOARD_IO_H
 #define BOARD_IO_H
 #include <stdbool.h>
@@ -10,9 +10,23 @@
 uint32_t board_enter_critical(void);
 /** 恢复传入的旧 PRIMASK，不修改其他状态；参数必须来自配对 enter。 */
 void board_leave_critical(uint32_t previous_mask);
-/** 永久禁止 TIM1 MOE/CCER，PA8/9/10 保持 GPIO 低电平；启动/ISR/故障均可调用。
+/** 禁止 TIM1 MOE/CCER，PA8/9/10 接管为 GPIO 低电平；启动/ISR/故障均可调用。
  * 无参数/返回；不停止采样计数器。不能关闭板卡固定接高的 EN/nSLEEP，非高阻断能。 */
 void board_disable_output(void);
+/** PWM预装载所需的值对象。margin_ticks为经批准的共同低窗口余量，不是电流限值。 */
+typedef struct { uint16_t u, v, w, margin_ticks; } board_pwm_ticks_t;
+/** 生成TIM1初始化末尾、切AF前调用；仅准备MOE0/idle低，不启动计数或输出。 */
+void board_prepare_output_idle(void);
+/** 初始化TIM3自由计时和Break中断；仅在全部生成初始化后调用一次。 */
+void board_initialize_output(void);
+/** 无锁读取驱动输入/固定PWM配置；调用者须持短临界区，true不是实物保护证明。 */
+bool board_output_is_ready(void);
+/** 已持runtime锁：装载三路预置并等自然UEV，不开MOE；generation用于拒绝撤销后的IRQ。 */
+bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation);
+/** 已持锁：设最近绝对设备us期限，比较值越过则返回false，禁止等16bit回绕。 */
+bool board_schedule_deadline(uint32_t deadline_us);
+/** 已持锁取消TIM3比较中断，不停止独立时基。 */
+void board_cancel_deadline(void);
 /** 生成初始化之后，前台校准 ADC、启用 SPI 和设备计时；不启动采样事件。
  * 返回成功与否；失败保持 PWM 禁止。仅在 main 完成全部 MX_*_Init 后调用一次。 */
 bool board_initialize_devices(void);

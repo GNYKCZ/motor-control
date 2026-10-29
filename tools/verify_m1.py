@@ -62,13 +62,14 @@ def main():
         print(f"PASS actual compiler dependency records: {len(header_paths)} source/header paths")
         linked_map = (root / "build/m1/m1_sampling.map").read_text(encoding="utf-8")
         for name in ["SystemClock_Config", "MX_GPIO_Init", "MX_DMA_Init", "MX_ADC1_Init", "MX_ADC2_Init",
-                     "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM4_Init", "MX_USART2_UART_Init",
+                     "MX_SPI1_Init", "MX_TIM1_Init", "MX_TIM2_Init", "MX_TIM3_Init", "MX_TIM4_Init", "MX_USART2_UART_Init",
                      "sensor_offset_add", "feedback_step", "feedback_init_spaced", "motor_runtime_read_log",
                      "command_init", "command_poll", "command_receive_byte", "motor_runtime_stop",
-                     "board_start_serial_receive", "USART2_IRQHandler"]:
+                     "board_start_serial_receive", "USART2_IRQHandler", "board_disable_output",
+                     "TIM1_BRK_IRQHandler", "TIM1_UP_IRQHandler", "TIM1_CC_IRQHandler", "TIM3_IRQHandler"]:
             require(re.search(r"^\s*" + name + r"\s+0x080[0-9a-fA-F]+\s+Thumb Code", linked_map, re.M),
                     "generated entry missing from linked image: " + name)
-        print("PASS generated clock, all 9 peripheral entries and canonical sensor/feedback entries are linked")
+        print("PASS generated clock/peripheral entries, canonical sensor/feedback and PWM deadline/fault IRQs linked")
     host_evidence_file = root / "build/host_m1/test_evidence.json"
     if host_evidence_file.exists():
         host_evidence = json.loads(host_evidence_file.read_text(encoding="utf-8"))
@@ -118,6 +119,8 @@ def main():
     own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
                   "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md", "docs/m3b3_compact_log.md", "tests/m1/test_telemetry_compact.c")]
+    own_paths += [root / name for name in ("docs/p1a2a_pwm_preparation.md", "tools/test_pwm_gate.py",
+                  "tests/m1/test_pwm_gate.cpp", "tests/m1/pwm_model/main.h", "tests/m1/pwm_model/linkage.h", "tests/m1/runtime_gate_stub.c")]
     own_paths += [root / name for name in ("tools/command_link.py", "tools/test_command.py",
                   "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md",
                   "tests/m1/test_uart_tc_race.cpp", "tests/m1/uart_model/usart.h", "tests/m1/uart_model/linkage.h")]
@@ -128,9 +131,9 @@ def main():
         generated_paths = {firmware / "Core" / name for name in GENERATED}
         checked_content = content
         if path in generated_paths:
-            # 其余15项完全由CubeMX生成；main的空白占位行/结束标记缩进也来自模板。
+            # main/tim的具名USER块单独检查，其余生成区保留CubeMX原字节与空白。
             checked_content = "\n".join(line for m in USER.finditer(content) if m[2] != "Header"
-                                        for line in m[3].splitlines() if line.strip()) if path.name == "main.c" else ""
+                                        for line in m[3].splitlines() if line.strip()) if path.name in {"main.c", "tim.c"} else ""
         for number, line in enumerate(checked_content.splitlines(), start=1):
             require(line == line.rstrip(), f"trailing whitespace: {path.relative_to(root)}:{number}")
     print(f"PASS UTF-8/newlines/whitespace: {len(set(own_paths))} authored files")
@@ -139,6 +142,7 @@ def main():
                  root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
                  root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", root / "docs/m3b3_compact_log.md", firmware / "README.md", firmware / "SOURCES.md"]
     documents += [root / "docs/p1a1_command_link.md"]
+    documents += [root / "docs/p1a2a_pwm_preparation.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

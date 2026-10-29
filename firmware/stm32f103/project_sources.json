@@ -18,6 +18,7 @@
     "Core/Src/system_stm32f1xx.c",
     "Core/Src/stm32f1xx_it.c",
     "board/board_io.c",
+    "board/board_pwm.c",
     "board/sample_frame.c",
     "app/motor_runtime.c",
     "app/telemetry.c",

@@ -67,12 +67,14 @@ static void expire_frame(uint32_t now_us)
         ((now_us-rx_last_us>25000u && now_us-rx_last_us<0x80000000u) ||
          (now_us-rx_started_us>250000u && now_us-rx_started_us<0x80000000u))) {
         queue_reply(rx_sequence,rx_code,REPLY_TIMEOUT);
+        motor_runtime_communication_error();
         reset_frame(); rx_drop=true;
     }
 }
 
 void command_receive_error(void)
 {
+    motor_runtime_communication_error();
     queue_reply(0u,0u,REPLY_UART);
     reset_frame(); rx_drop=true;
 }
@@ -125,9 +127,11 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
                 if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP) { result=REPLY_DENIED; }
             }
         }
+        if (result!=REPLY_OK) { motor_runtime_communication_error(); }
         queue_reply(rx_sequence,rx_code,result);
         reset_frame();
     } else if (i>=22u) {
+        motor_runtime_communication_error();
         queue_reply(rx_sequence,rx_code,REPLY_FORMAT);
         reset_frame(); rx_drop=true; /* 第23字节不是LF，整条物理行都拒绝。 */
     } else { rx_index=i+1u; }

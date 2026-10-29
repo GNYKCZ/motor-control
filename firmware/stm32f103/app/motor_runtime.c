@@ -1,11 +1,38 @@
 /** 运行状态所有者。前台与 ADC/故障 IRQ 共享下列静态状态，统一以短临界区互斥。
- * 本批永无正常输出分支；即使任意输入错误，board_disable_output 也先于状态更新。 */
+ * 生产profile为空；合成profile仅在host构建中覆盖完整门控状态，不进入目标映像。 */
 #include "motor_runtime.h"
 #include "board_config.h"
 #include "board_io.h"
 #include <stddef.h>
 
-static motor_status_t runtime_status;  /**< 全部状态只在本文件写入。 */
+#if defined(MOTOR_GATE_TEST_PROFILES) && (defined(__ARM_ARCH) || defined(__arm__))
+#error "Synthetic output profiles are forbidden in target firmware"
+#endif
+
+typedef struct { board_pwm_ticks_t ticks; uint32_t arm_us, duration_us; } pwm_profile_t;
+#ifdef MOTOR_GATE_TEST_PROFILES
+/* 只供host时间轨迹，不是实际电机的安全限值，不得进入目标构建。 */
+static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
+#endif
+static const pwm_profile_t *output_profile;
+static uint32_t output_generation, arm_deadline_us, pulse_deadline_us;
+
+unsigned motor_runtime_output_profile_count(void)
+{
+#ifdef MOTOR_GATE_TEST_PROFILES
+    return 1u;
+#else
+    return 0u; /* 生产没有任何已批准profile，不提供动态注入接口。 */
+#endif
+}
+
+static motor_status_t runtime_status; /**< 唯一生命周期所有者，所有共享访问持短锁。 */
+
+static bool output_is_protected(void)
+{
+    return runtime_status.state==MOTOR_RUNTIME_ARMED || runtime_status.state==MOTOR_RUNTIME_STARTING
+        || runtime_status.state==MOTOR_RUNTIME_ACTIVE;
+}
 static uint32_t first_sample_time_us; /**< 首包时刻，用于启动等待界限。 */
 static uint32_t boot_completed_us; /**< 启动握手时间，检测完全没有 ADC 事件的情况。 */
 static bool has_received_sample; /**< 是否收到过完整包；不能用会回绕的统计计数判断首次。 */
@@ -17,6 +44,41 @@ static uint32_t feedback_raw_sequence;
 static uint32_t feedback_adc_sequence;
 static uint32_t feedback_divider;
 static uint32_t feedback_enqueued_us; /**< 待消费输入所属ADC完成时刻，和原始序号一起保留。 */
+
+/** 当前DISABLED或受保护状态都继续处理反馈；FAULT/BOOT不得重新发布有效。 */
+static bool input_is_monitored(void)
+{
+    return runtime_status.state==MOTOR_RUNTIME_DISABLED || output_is_protected();
+}
+
+/** 已持锁：真实现在时刻检查；失联、资格或脉冲期限均不依赖前台循环。 */
+static void expire_output(uint32_t now)
+{
+    if (!output_is_protected()) { return; }
+    if (now-runtime_status.sample.current_completed_us>BOARD_SAMPLE_GAP_LIMIT_US) {
+        motor_runtime_latch_fault(MOTOR_FAULT_SAMPLE);
+    } else if (now-runtime_status.feedback_completed_us>BOARD_FEEDBACK_GAP_LIMIT_US) {
+        motor_runtime_latch_fault(MOTOR_FAULT_FEEDBACK);
+    } else if ((int32_t)(now-(runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us))>=0) {
+        motor_runtime_stop();
+    }
+}
+
+/** 已持锁：绝对期限不随新命令续期；失败立即撤销，禁止递归重试或等16bit下一圈。 */
+static void schedule_output_deadline(void)
+{
+    if (!output_is_protected()) { board_cancel_deadline(); return; }
+    uint32_t now=board_get_time_us();
+    uint32_t deadline=runtime_status.sample.current_completed_us+BOARD_SAMPLE_GAP_LIMIT_US+1u;
+    uint32_t feedback_deadline=runtime_status.feedback_completed_us+BOARD_FEEDBACK_GAP_LIMIT_US+1u;
+    if ((int32_t)(feedback_deadline-deadline)<0) { deadline=feedback_deadline; }
+    uint32_t output_deadline=runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us;
+    if ((int32_t)(output_deadline-deadline)<0) { deadline=output_deadline; }
+    if ((int32_t)(deadline-now)<=0 || !board_schedule_deadline(deadline)) {
+        expire_output(board_get_time_us());
+        if (output_is_protected()) { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); }
+    }
+}
 
 /** 已持锁：失效已发布结果及待处理输入，不重置前台独占的算法状态。 */
 static void motor_runtime_clear_feedback(void)
@@ -32,7 +94,7 @@ static void motor_runtime_clear_feedback(void)
 /** 已持锁：每个原始帧都核验，只把固定分频后的真实值交给前台。无浮点/循环。 */
 static void motor_runtime_queue_feedback(const motor_sample_t *sample, bool valid)
 {
-    if (runtime_status.state != MOTOR_RUNTIME_DISABLED) { return; }
+    if (!input_is_monitored()) { return; }
     if (!valid && !feedback_has_raw) { return; } /* 保留M1首帧启动宽限。 */
     if (!valid || (feedback_has_raw &&
         (sample->sequence - feedback_adc_sequence != 1u ||
@@ -82,7 +144,9 @@ void motor_runtime_init(void)
     motor_status_t initial_status = {0};
     runtime_status = initial_status;
     runtime_status.state = MOTOR_RUNTIME_BOOT;
-    runtime_status.pwm_is_permanently_blocked = true;
+    runtime_status.pwm_is_permanently_blocked = motor_runtime_output_profile_count()==0u;
+    output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
+    board_cancel_deadline();
     first_sample_time_us = 0u;
     boot_completed_us = 0u;
     has_received_sample = false;
@@ -119,31 +183,101 @@ void motor_runtime_stop(void)
 {
     uint32_t mask=board_enter_critical();
     board_disable_output();
-    /* 不把FAULT改回DISABLED；当前所有路径都禁止PWM，未来ACTIVE须另审资格撤销竞态。 */
+    output_generation++; output_profile=NULL;
+    board_cancel_deadline();
+    if (output_is_protected()) { runtime_status.state=MOTOR_RUNTIME_DISABLED; }
     board_leave_critical(mask);
 }
 
 void motor_runtime_latch_fault(motor_fault_t fault)
 {
-    board_disable_output();
-    uint32_t previous_mask = board_enter_critical();
+    uint32_t mask=board_enter_critical();
+    motor_runtime_stop(); /* 资格撤销与禁用同一状态事务，不能在关MOE后被开始事务插入。 */
     runtime_status.fault_flags |= (uint32_t)fault;
-    runtime_status.state = MOTOR_RUNTIME_FAULT;
+    runtime_status.state=MOTOR_RUNTIME_FAULT;
     motor_runtime_stop_offset(false);
     motor_runtime_clear_feedback();
-    board_leave_critical(previous_mask);
+    board_leave_critical(mask);
+}
+
+void motor_runtime_communication_error(void)
+{
+    uint32_t mask=board_enter_critical();
+    if (output_is_protected()) { motor_runtime_latch_fault(MOTOR_FAULT_COMMUNICATION); }
+    board_leave_critical(mask);
+}
+
+/** 已持锁，使用现在的时间；曾经有效不能替代当前新鲜输入。 */
+static bool output_inputs_are_valid(void)
+{
+    uint32_t now=board_get_time_us();
+    return runtime_status.fault_flags==0u && runtime_status.sample.is_valid
+        && runtime_status.feedback.is_valid && runtime_status.feedback.direct_is_valid
+        && runtime_status.feedback.window_is_valid
+        && now-runtime_status.sample.current_completed_us<=BOARD_SAMPLE_GAP_LIMIT_US
+        && now-runtime_status.feedback_completed_us<=BOARD_FEEDBACK_GAP_LIMIT_US
+        && board_output_is_ready();
+}
+
+bool motor_runtime_arm(unsigned profile_id)
+{
+    uint32_t mask=board_enter_critical();
+    const pwm_profile_t *candidate=NULL;
+#ifdef MOTOR_GATE_TEST_PROFILES
+    if (profile_id==1u) { candidate=&test_profile; }
+#else
+    (void)profile_id;
+#endif
+    bool accepted=candidate!=NULL && runtime_status.state==MOTOR_RUNTIME_DISABLED && output_inputs_are_valid();
+    if (accepted) {
+        output_profile=candidate; output_generation++;
+        arm_deadline_us=board_get_time_us()+candidate->arm_us;
+        runtime_status.state=MOTOR_RUNTIME_ARMED;
+        schedule_output_deadline();
+        accepted=runtime_status.state==MOTOR_RUNTIME_ARMED;
+    } else if (output_is_protected()) { motor_runtime_stop(); }
+    board_leave_critical(mask);
+    return accepted;
+}
+
+bool motor_runtime_pulse(void)
+{
+    uint32_t mask=board_enter_critical();
+    bool accepted=runtime_status.state==MOTOR_RUNTIME_ARMED && output_profile!=NULL
+        && (int32_t)(arm_deadline_us-board_get_time_us())>0 && output_inputs_are_valid();
+    if (accepted) {
+        pulse_deadline_us=board_get_time_us()+output_profile->duration_us;
+        runtime_status.state=MOTOR_RUNTIME_STARTING;
+        motor_runtime_stop_offset(false); /* 开始后永不再收集带流零偏候选。 */
+        schedule_output_deadline();
+        accepted=runtime_status.state==MOTOR_RUNTIME_STARTING
+            && board_prepare_pulse(output_profile->ticks,output_generation);
+    }
+    if (!accepted && output_is_protected()) { motor_runtime_stop(); }
+    board_leave_critical(mask);
+    return accepted;
+}
+
+bool motor_runtime_commit_output(uint32_t generation)
+{
+    /* board已持同一短锁；成功只授予本次MOE写，其他路径从不自动使能。 */
+    if (runtime_status.state!=MOTOR_RUNTIME_STARTING || generation!=output_generation
+        || (int32_t)(pulse_deadline_us-board_get_time_us())<=0 || !output_inputs_are_valid()) { return false; }
+    runtime_status.state=MOTOR_RUNTIME_ACTIVE;
+    return true;
 }
 
 void motor_runtime_handle_sample(const motor_sample_t *sample)
 {
-    board_disable_output();
     uint32_t previous_mask = board_enter_critical();
+    if (!output_is_protected()) { board_disable_output(); }
     if (sample == NULL || runtime_status.state == MOTOR_RUNTIME_BOOT) {
         runtime_status.state = MOTOR_RUNTIME_FAULT;
         runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
         runtime_status.rejected_count++;
         motor_runtime_stop_offset(true);
         motor_runtime_clear_feedback();
+        motor_runtime_latch_fault(MOTOR_FAULT_SAMPLE);
         board_leave_critical(previous_mask);
         return;
     }
@@ -199,9 +333,8 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
     }
     motor_runtime_queue_feedback(sample, is_valid);
     if (runtime_status.state == MOTOR_RUNTIME_FAULT) {
-        motor_runtime_stop_offset(false);
-        motor_runtime_clear_feedback();
-    }
+        motor_runtime_latch_fault((motor_fault_t)runtime_status.fault_flags);
+    } else { schedule_output_deadline(); }
     board_leave_critical(previous_mask);
 }
 
@@ -209,7 +342,7 @@ void motor_runtime_poll_feedback(void)
 {
     feedback_sample_t input;
     uint32_t previous_mask = board_enter_critical();
-    if (runtime_status.state != MOTOR_RUNTIME_DISABLED || !feedback_pending) {
+    if (!input_is_monitored() || !feedback_pending) {
         board_leave_critical(previous_mask);
         return;
     }
@@ -225,7 +358,7 @@ void motor_runtime_poll_feedback(void)
     feedback_result_t result;
     bool valid = feedback_step(&feedback_state, input, &result);
     previous_mask = board_enter_critical();
-    if (runtime_status.state == MOTOR_RUNTIME_DISABLED) {
+    if (input_is_monitored()) {
         /* RV-001：必须以发布时的设备当前时间检查。ADC停更时最后一帧时间也停住，
          * 不能用它代替now，否则前台延迟后会先发布过期有效值，再到下轮才报超时。
          * 持锁取时与最近ADC一致，避免取时后新ADC发布造成无符号倒序误报。 */
@@ -241,6 +374,7 @@ void motor_runtime_poll_feedback(void)
             if (sample_is_late) { runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE; }
             motor_runtime_stop_offset(false);
             motor_runtime_clear_feedback();
+            motor_runtime_latch_fault((motor_fault_t)runtime_status.fault_flags);
         } else {
             runtime_status.feedback = result;
             runtime_status.feedback_sequence = input.sequence;
@@ -248,6 +382,7 @@ void motor_runtime_poll_feedback(void)
             runtime_status.feedback_raw_count = input.raw_angle_count;
         }
     }
+    schedule_output_deadline();
     uint32_t poll_elapsed_us = board_get_time_us() - poll_started_us;
     if (poll_elapsed_us > runtime_status.feedback_poll_max_us) {
         runtime_status.feedback_poll_max_us = poll_elapsed_us;
@@ -298,14 +433,14 @@ void motor_runtime_check_deadline(uint32_t now_us)
     uint32_t elapsed_us = now_us - reference_us;
     /* now_us 在前台调用前取得，ADC 可能随后发布更晚时间；这种交错不是超时。
      * 以半周期规则拒绝倒序观察，下次前台调用会使用新时间再检查。 */
-    if (runtime_status.state == MOTOR_RUNTIME_DISABLED
+    if (input_is_monitored()
         && elapsed_us < 0x80000000u && elapsed_us > limit_us) {
-        /* 持锁直接更新，避免退出临界区后新包到达而误把旧超时锁为故障。 */
-        board_disable_output();
-        runtime_status.state = MOTOR_RUNTIME_FAULT;
-        runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
-        motor_runtime_stop_offset(false);
-        motor_runtime_clear_feedback();
+        motor_runtime_latch_fault(MOTOR_FAULT_SAMPLE);
+    }
+    expire_output(board_get_time_us());
+    if (output_is_protected()) {
+        /* 所有期限已处理；前台的旧now不用于重新安排过去的比较点。 */
+        schedule_output_deadline();
     }
     board_leave_critical(previous_mask);
 }

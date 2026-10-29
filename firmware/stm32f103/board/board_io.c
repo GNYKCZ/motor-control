@@ -1,6 +1,6 @@
 /** STM32F103C8 板级适配：使用生成的外设句柄，拥有 DMA 缓冲、设备时间和 UART 借用状态。
  * 完成事件进入 runtime；SPI 接收缓冲永不直接向前台公开，前台只读 runtime 快照。
- * M1 仅采样。PA8/9/10 固定 GPIO 低，绝不配置为 PWM AF；无法控制驱动 EN/nSLEEP。 */
+ * GPIO/PWM门控由board_pwm唯一拥有；生产profile为空，无法控制驱动 EN/nSLEEP。 */
 #include "board_io.h"
 #include "board_config.h"
 #include "sample_frame.h"
@@ -32,19 +32,6 @@ void board_leave_critical(uint32_t previous_mask)
     __set_PRIMASK(previous_mask);
 }
 
-void board_disable_output(void)
-{
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_TIM1_CLK_ENABLE();
-    TIM1->BDTR &= ~TIM_BDTR_MOE;
-    TIM1->CCER = 0u;
-    GPIOA->BRR = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
-    /* 三个引脚必须始终是普通推挽低电平，不能因 MOE 清零而留下悬空驱动 IN。
-     * CRH 低 12 bit 分别对应 PA8..10，0x2 表示 2 MHz 通用推挽输出。
-     * 这相当于低侧制动，不是高阻断能；不在任何地方配置 AF 或启动 PWM 通道。 */
-    GPIOA->CRH = (GPIOA->CRH & ~0xfffu) | 0x222u;
-}
-
 uint32_t board_get_time_us(void)
 {
     uint32_t previous_mask = board_enter_critical();
@@ -66,6 +53,7 @@ uint32_t board_get_time_us(void)
 bool board_initialize_devices(void)
 {
     board_disable_output();
+    board_initialize_output();
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK
         || HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK) {
         return false;

@@ -61,12 +61,6 @@ void Error_Handler(void);
 #define ENCODER_CS_GPIO_Port GPIOA
 #define DRIVER_NFAULT_Pin GPIO_PIN_12
 #define DRIVER_NFAULT_GPIO_Port GPIOB
-#define MOTOR_IN1_Pin GPIO_PIN_8
-#define MOTOR_IN1_GPIO_Port GPIOA
-#define MOTOR_IN2_Pin GPIO_PIN_9
-#define MOTOR_IN2_GPIO_Port GPIOA
-#define MOTOR_IN3_Pin GPIO_PIN_10
-#define MOTOR_IN3_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
