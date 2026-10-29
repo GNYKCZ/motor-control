@@ -113,7 +113,13 @@ void TIM1_CC_IRQHandler(void)
                 /* 短Break可能发生在最终检查与MOE写之间，低窗内再次检查，禁止陈旧事务重开。 */
                 bool invalid_window=!board_output_is_ready() || !in_start_window();
                 uint32_t checked_us=board_get_time_us();
-                if (motor_runtime_output_deadline_reached(checked_us)) {
+                bool expired=motor_runtime_output_deadline_reached(checked_us);
+                if (expired || invalid_window) {
+                    /* 先清MOE，避免状态清理/时标记录挤占共同低窗。 */
+                    TIM1->BDTR &= ~TIM_BDTR_MOE;
+                    motor_runtime_record_gate(false,board_get_time_us());
+                }
+                if (expired) {
                     motor_runtime_check_deadline(checked_us);
                 } else if (invalid_window) {
                     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
