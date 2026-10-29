@@ -57,8 +57,9 @@ ARM/PULSE明确拒绝；用户已有一次COM9的STATUS严格匹配回执，开�
 ## AI 协作与审查
 
 - [工程约定](AGENTS.md)：开发边界、验证矩阵和硬件操作要求。
-- [Issue 工作流与可复制提示词](docs/issue_workflow_prompts.md)：Design → Work → Review → 返工/复审，包括授权、换对话续接和停止条件。
+- [Issue 工作流与可复制提示词](docs/issue_workflow_prompts.md)：按授权工作包连续推进；Design起始设计后一次性交Work，Work直接交Review，Review结论只回Work，范围内修复直接闭环，Work向用户交付。包括授权、评审工作树隔离和停止条件。
+- 工作包围绕一项可用阶段成果和关键依赖推进，按实际风险选择必要验收；复用够用工具，避免局部完美导致无限扩测/重建。主线进展用新增能力/通过验收报告，真实缺陷和证据要求保持。
 - [Review 包](review/README.md)：按固件、仿真、实验分别加载检查项。
 - [迁移依据与研究参考](docs/ai_review_basis.md)：源仓库版本、2026 年研究启发、采用方式及限制。
 
-本包对应 [实物路线图 #1](https://github.com/GNYKCZ/motor-control/issues/1) 与 [仿真路线图 #2](https://github.com/GNYKCZ/motor-control/issues/2)。文档交付不代表这些路线图已实现。首次开发先选择一个小阶段并冻结验收；缺少编译器、MATLAB 或板端数据时记录缺口，不伪造通过结果。
+本包对应 [实物路线图 #1](https://github.com/GNYKCZ/motor-control/issues/1) 与 [仿真路线图 #2](https://github.com/GNYKCZ/motor-control/issues/2)。文档交付不代表这些路线图已实现。首次开发确定用户授权的可验收工作包，可包含多个依赖步骤；包内连续推进，不能从路线图推断无限授权。小改动设计写PR说明，重大架构/物理语义另审；缺少编译器、MATLAB或板端数据时如实记录缺口。

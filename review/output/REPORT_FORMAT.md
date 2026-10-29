@@ -5,6 +5,8 @@
 - Mode、仓库、Issue/子阶段、设计评论、PR、base/head 完整 SHA。
 - Version status：`CURRENT / STALE / UNVERIFIED`；记录核对时间、远端 base/head 和本地输入状态。CURRENT 表示与被审版本一致，STALE 表示已变化，UNVERIFIED 表示无法确认；它与下述技术结论分开记录。
 - 本轮验收与实际改动对应；自审或独立 Review 的真实身份。
+- 用户可感知成果、关键路径/依赖、本批最小必要验收与停止点；不以文件/测试/文档数量替代阶段进展。
+- 固定评审工作树绝对路径、输入差异和允许生成物；仅该树被冻结。
 - Completeness：COMPLETE / PARTIAL；按覆盖规范给 ledger。
 - 验收矩阵：契约来源、oracle、实际命令/证据、环境/配置/版本、PASS / FAIL / NOT RUN / NOT APPLICABLE。
 
@@ -18,6 +20,7 @@
 - Confidence：0–1 主观标记。
 - Trigger / Evidence / Impact：可达条件、事实、具体后果。
 - Violated contract：需求/方程/不变量来源。
+- Current acceptance / Required now：与当前验收的关系、具体后果，以及为何必须本批修复；无确认影响的可选完善记建议/follow-up，不列阻塞Finding。
 - Verification：已排除的保护条件与验证结果。
 - Suggested direction：在现有职责内恢复什么行为，不给强制 patch。
 - Constraints / Non-goals：保持的接口、强度、范围与语义。
@@ -30,6 +33,10 @@
 
 概述实际涉及的控制/时序、C/数值、模型/接触、实验/数据、测试 oracle 和需求/资料对应。仅列实际运行并观察到结果的命令；未运行写原因。区分软件与硬件证据，写明当前最多支持的 claim。
 
+复用的旧证据单列原SHA/链接、输入哈希、配置/工具/环境一致性与本轮适用范围，不描述为新运行。
+说明必要验证如何对应变更/风险；扩展或重复验证须有新变更/失败/具体风险依据，不因追求局部完美无限扩测。
+复审报告保留完整base/head、RV状态、修复diff覆盖及证据差异，用链接引用首交契约，不重发初始化全文。
+
 ## 结论
 
 - `PASS`：范围 COMPLETE，没有 P0–P2，当前验收与必要验证充分。
@@ -40,3 +47,7 @@
 合并建议单列：`APPROVE`（版本 CURRENT、当前 head COMPLETE、无 P0–P2、必要证据齐全）、`REQUEST CHANGES`（需要当前 PR 修复的确认问题/未满足项）、`INCONCLUSIVE`（关键证据不可获得）。必要项 NOT RUN 或版本 STALE/UNVERIFIED 时不得 APPROVE；旧版本技术结论仅保留为历史记录，不能套用到当前版本。
 
 列遗留风险、未覆盖项、返工轮次和下一负责角色。发布前核对 base/head；新提交后旧报告仅作历史证据。建议合并不等于执行合并的授权，不等于硬件运行许可。
+
+按已核实的人类交接授权，每次结论只发送Work（PASS/PASS WITH LIMITATIONS/FAIL/INCONCLUSIVE均包括），
+记录Work目标和实际发送状态，不抄送Design。普通Finding由Work核查修复后直接回原Review；重大问题由Work向用户提出影响和选项，用户决定是否重启Design。
+未审完继续完成；证据确实不可得才给相应结论，不能等待Design转发或重派。合并权限单列，不从APPROVE推断授权。
