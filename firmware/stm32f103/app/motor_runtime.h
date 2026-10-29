@@ -23,7 +23,10 @@ typedef enum {
     MOTOR_FAULT_DEVICE = 4u,       /**< DMA/ADC 调度或驱动 nFAULT 异常。 */
     MOTOR_FAULT_FEEDBACK = 8u,     /**< 原始流断续、抽帧邮箱积压或反馈估算拒绝；锁存不自动恢复。 */
     MOTOR_FAULT_COMMUNICATION = 16u, /**< 受保护状态中的UART/帧错误，立即撤销资格/输出。 */
-    MOTOR_FAULT_EXPERIMENT = 32u /**< 本次固定实验累计位移达到46count，非物理最大转角保证。 */
+    MOTOR_FAULT_EXPERIMENT = 32u, /**< 本次固定实验累计位移达到46count，非物理最大转角保证。 */
+    MOTOR_FAULT_START_WINDOW = 64u, /**< 启动事务共同低窗检查拒绝；同时保留DEVICE位。 */
+    MOTOR_FAULT_START_INPUT = 128u, /**< 最终代次/输入/资格检查拒绝；同时保留DEVICE位。 */
+    MOTOR_FAULT_START_TIME = 256u /**< 最终开门前期限检查拒绝；同时保留DEVICE位。 */
 } motor_fault_t;
 
 typedef struct {

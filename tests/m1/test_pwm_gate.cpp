@@ -174,6 +174,7 @@ int main()
     // 写MOE后计数推进到拒绝窗，必须由本次复核关闭，不调用测试补救STOP。
     still_ready();button_steps(true,21u);button_steps(false,21u);delay_after_moe=true;open_window();
     check_closed();CHECK(enables==1u && status().state==MOTOR_RUNTIME_FAULT);
+    CHECK(status().fault_flags & MOTOR_FAULT_START_WINDOW);
     CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_FAULT && action.timing_flags==0xc0u);
     // RV-001：在CC开门路径的每个寄存器访问点跨过绝对期限，不能保留ACTIVE或残留重开。
     still_ready();button_steps(true,21u);button_steps(false,21u);
@@ -254,6 +255,7 @@ int main()
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());
     natural_update();TIM1_UP_IRQHandler();pwm_tim1.CNT.value=1700u;pwm_tim1.CR1.value|=TIM_CR1_DIR;
     pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();check_closed();CHECK(status().state==MOTOR_RUNTIME_FAULT);
+    CHECK(status().fault_flags==(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW));
     /* main完全停滞，TIM3在raw年龄301us独立停机；300us仍未超过旧门限。 */
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
     timer_tick(300u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
