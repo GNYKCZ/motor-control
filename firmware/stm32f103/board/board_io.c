@@ -1,6 +1,6 @@
 /** STM32F103C8 板级适配：使用生成的外设句柄，拥有 DMA 缓冲、设备时间和 UART 借用状态。
  * 完成事件进入 runtime；SPI 接收缓冲永不直接向前台公开，前台只读 runtime 快照。
- * GPIO/PWM门控由board_pwm唯一拥有；生产profile为空，无法控制驱动 EN/nSLEEP。 */
+ * GPIO/PWM门控由board_pwm唯一拥有；本地按键受限profile，无法控制驱动 EN/nSLEEP。 */
 #include "board_io.h"
 #include "board_config.h"
 #include "sample_frame.h"

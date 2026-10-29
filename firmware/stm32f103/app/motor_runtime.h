@@ -1,4 +1,4 @@
-/** 运行管理：唯一拥有生命周期/快照的模块；生产空profile只能到BOOT、DISABLED、FAULT。
+/** 运行管理：唯一拥有生命周期/快照的模块；生产仅由本地新按键手势可进入一次受限动作。
  * 输入来自 board 完成包，输出为一致状态；初始化在前台，采样在 ADC IRQ，快照在前台。
  * 所有共享状态修改/读取均保存恢复 PRIMASK；profile只读，不保留串口指针，无自动对齐。 */
 #ifndef MOTOR_RUNTIME_H
@@ -9,9 +9,9 @@
 
 typedef enum {
     MOTOR_RUNTIME_BOOT = 0,     /**< 尚未确认外设初始化完成，禁止 PWM。 */
-    MOTOR_RUNTIME_DISABLED = 1, /**< 只采样，永久禁止 PWM。 */
+    MOTOR_RUNTIME_DISABLED = 1, /**< 当前只采样，不使能PWM；新本地手势仍须完整资格检查。 */
     MOTOR_RUNTIME_FAULT = 2,    /**< 故障锁存，仍禁止 PWM，本批无自动复位。 */
-    MOTOR_RUNTIME_ARMED = 3,    /**< 一次性资格，无PWM；生产空profile不可到达。 */
+    MOTOR_RUNTIME_ARMED = 3,    /**< 一次性资格，无PWM；仅本地受限profile建立，串口不可到达。 */
     MOTOR_RUNTIME_STARTING = 4, /**< 资格已消耗，等自然UEV与共同低窗。 */
     MOTOR_RUNTIME_ACTIVE = 5    /**< 已通过最终事务；非电气输出证明。 */
 } motor_runtime_state_t;
@@ -22,7 +22,8 @@ typedef enum {
     MOTOR_FAULT_SAMPLE = 2u,       /**< 完整帧内容、CRC、时间或序号无效。 */
     MOTOR_FAULT_DEVICE = 4u,       /**< DMA/ADC 调度或驱动 nFAULT 异常。 */
     MOTOR_FAULT_FEEDBACK = 8u,     /**< 原始流断续、抽帧邮箱积压或反馈估算拒绝；锁存不自动恢复。 */
-    MOTOR_FAULT_COMMUNICATION = 16u /**< 受保护状态中的UART/帧错误，立即撤销资格/输出。 */
+    MOTOR_FAULT_COMMUNICATION = 16u, /**< 受保护状态中的UART/帧错误，立即撤销资格/输出。 */
+    MOTOR_FAULT_EXPERIMENT = 32u /**< 本次固定实验累计位移达到46count，非物理最大转角保证。 */
 } motor_fault_t;
 
 typedef struct {
@@ -32,7 +33,7 @@ typedef struct {
     uint32_t rejected_count;     /**< 被拒的无效/重复/陈旧包数。 */
     motor_sample_t sample;       /**< 最近一次收到的完整包；无效时也保留原始证据。 */
     bool has_valid_sample;      /**< 本次启动以来是否至少收到一个有效包。 */
-    bool pwm_is_permanently_blocked; /**< 本批恒 true；不宣称功率桥高阻关闭。 */
+    bool pwm_is_permanently_blocked; /**< profile可用不等于正在输出；仍不宣称功率桥高阻关闭。 */
     sensor_offset_t estimated_offset; /**< DISABLED中完整连续帧的零偏候选整数统计。 */
     uint32_t offset_rejected_count; /**< 候选批被首个无效帧中止的次数，最多1；完整拒收总数仍见rejected_count。 */
     bool offset_is_aborted;     /**< 任一无效/重复/时序错误/故障会冻结未完成批次，不补数。 */
@@ -81,12 +82,27 @@ void motor_runtime_check_deadline(uint32_t now_us);
 void motor_runtime_poll_feedback(void);
 /** IRQ/前台幂等STOP：立即禁止调制，撤销资格/待开始，不等待回执、不清故障/采样历史。 */
 void motor_runtime_stop(void);
-/** 生产profile数量恒0；测试专用profile只在主机宏构建，不能进入ARM目标。 */
+/** 生产固定本地profile数量1；测试专用profile只在主机宏构建，不能进入ARM目标。 */
 unsigned motor_runtime_output_profile_count(void);
-/** 为未来协议预留的实际状态入口：只接受编译期批准profile，非串口调用；本批恒拒绝。 */
+#ifdef MOTOR_GATE_TEST_PROFILES
+/** host合成profile入口；生产函数为runtime私有，只允许本地手势调用。 */
 bool motor_runtime_arm(unsigned profile_id);
 /** 消耗一次资格，开始等待UEV/低窗；绝不续期，失败也不返还资格。 */
 bool motor_runtime_pulse(void);
+#endif
+/** 前台约1ms采样PA12低有效电平。非阻塞去抖/新鲜释放，启动按住不触发，每启动最多1次尝试。 */
+void motor_runtime_poll_button(bool pressed, uint32_t now_us);
+/** 前台周期日志资格：受保护输出状态暂停旧M3B3，真实回执用P1R2。 */
+bool motor_runtime_output_is_busy(void);
+/** board已持锁，写MOE之后/清MOE之后的设备时间标记；不证明电气边沿已被外部观测。 */
+void motor_runtime_record_gate(bool opened, uint32_t now_us);
+typedef enum { MOTOR_ACTION_NONE=0, MOTOR_ACTION_REJECTED=1, MOTOR_ACTION_WAIT_START=2,
+    MOTOR_ACTION_ACTIVE=3, MOTOR_ACTION_DURATION=4, MOTOR_ACTION_STOP=5, MOTOR_ACTION_FAULT=6 } motor_action_reason_t;
+typedef struct { uint32_t id, requested_us, started_us, ended_us; motor_action_reason_t reason;
+    uint8_t timing_flags; /**< 0x80开始时标有效，0x40结束时标有效；0时刻也合法。 */
+} motor_action_t;
+/** 同一短锁同时冻结旧状态与最近一次动作槽，供P1R2回执；不格式化、不提供可写内部指针。 */
+bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
 /** UART错误/格式/CRC/超时：仅ARMED/STARTING/ACTIVE锁存通信故障并先停。 */

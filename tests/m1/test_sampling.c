@@ -156,7 +156,7 @@ static motor_status_t read_status(void)
 {
     motor_status_t status;
     assert(motor_runtime_read_status(&status));
-    assert(status.pwm_is_permanently_blocked);
+    assert(!status.pwm_is_permanently_blocked && motor_runtime_output_profile_count()==1u);
     return status;
 }
 

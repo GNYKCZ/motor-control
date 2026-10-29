@@ -15,7 +15,9 @@ void board_disable_output(void)
     uint32_t mask=board_enter_critical();
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_TIM1_CLK_ENABLE();
+    bool had_request=pending_phase!=0u || (TIM1->BDTR & TIM_BDTR_MOE)!=0u;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
+    if (had_request && deadline_clock_ready) { motor_runtime_record_gate(false,board_get_time_us()); }
     pending_phase=0u;
     TIM1->DIER &= ~(TIM_DIER_UIE | TIM_DIER_CC4IE);
     /* CCxE仍保持idle低，先接管GPIO再关通道，避免AF无驱动窗口。 */
@@ -103,8 +105,10 @@ void TIM1_CC_IRQHandler(void)
         if (pending_phase==2u) {
             pending_phase=0u;
             if (board_output_is_ready() && in_start_window()
-                && motor_runtime_commit_output(pending_generation)) {
+                && motor_runtime_commit_output(pending_generation) && in_start_window()) {
                 TIM1->BDTR |= TIM_BDTR_MOE;
+                uint32_t opened_us=board_get_time_us();
+                motor_runtime_record_gate(true,opened_us);
                 /* 短Break可能发生在最终检查与MOE写之间，低窗内再次检查，禁止陈旧事务重开。 */
                 if (!board_output_is_ready() || !in_start_window()) {
                     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);

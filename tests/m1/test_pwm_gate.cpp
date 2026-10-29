@@ -10,6 +10,8 @@ PwmTimer pwm_tim1(true),pwm_tim3(false);
 PwmGpio pwm_gpioa,pwm_gpiob;
 static uint32_t now_us,mask,sequence,clock_step;
 static uint32_t active_ticks[3];
+static bool fixed_angle, delay_after_moe;
+static uint16_t fixed_count;
 static unsigned access_count,inject_at,inject_kind,enables,early_enables,ug_writes;
 static bool injecting,queued_stop,trace;
 
@@ -38,8 +40,13 @@ void pwm_model_written(unsigned id, uint32_t value)
     if (id==R_EGR) { ++ug_writes; }
     if (id==R_BDTR && (value & TIM_BDTR_MOE)) {
         ++enables;
+        #ifdef MOTOR_GATE_TEST_PROFILES
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
+#else
+        if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
+#endif
             || pwm_tim1.CNT.value<=300u || (pwm_tim1.CR1.value & TIM_CR1_DIR)) { ++early_enables; }
+        if (delay_after_moe) { pwm_tim1.CNT.value=1700u; }
     }
     if (id==R_CRH && (value & 0xfffu)==0xaaau) {
         CHECK(!(pwm_tim1.BDTR.value & TIM_BDTR_MOE));
@@ -65,7 +72,7 @@ static void sample(bool poll=true)
 {
     ++sequence;
     board_encoder_frame_t e={};
-    e.sequence=sequence;e.raw_angle_count=(uint16_t)(sequence & 16383u);
+    e.sequence=sequence;e.raw_angle_count=fixed_angle ? fixed_count : (uint16_t)(sequence & 16383u);
     e.read_started_us=now_us-50u;e.read_completed_us=now_us-28u;e.is_valid=true;
     motor_sample_t s=board_make_sample(sequence,now_us,2027u,2028u,&e);
     motor_runtime_handle_sample(&s);
@@ -74,6 +81,7 @@ static void sample(bool poll=true)
 static void reset(uint32_t base=0u)
 {
     trace=false;inject_at=0u;inject_kind=0u;access_count=0u;queued_stop=false;mask=0u;
+    fixed_angle=false; delay_after_moe=false; fixed_count=0u;
     clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
     pwm_tim1.BDTR.value=TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR;
     pwm_tim1.CCER.value=0u;pwm_tim1.DIER.value=0u;pwm_tim1.SR.value=0u;
@@ -106,15 +114,98 @@ static void timer_tick(uint32_t delta)
         }
     }
 }
+/** 1ms前台轮询，期间真实runtime继续收100us样本，不借大时间跳跃补认手势。 */
+static void button_steps(bool pressed,unsigned milliseconds)
+{
+    for (unsigned ms=0u;ms<milliseconds;++ms) {
+        for (unsigned i=0u;i<10u;++i) { now_us+=100u;sample(); }
+        motor_runtime_poll_button(pressed,now_us);
+    }
+}
+static void still_ready()
+{
+    reset();fixed_angle=true;button_steps(false,300u);
+}
 int main()
 {
-    (void)timer_tick;
+    (void)timer_tick; (void)button_steps; (void)still_ready;
     reset();
 #ifndef MOTOR_GATE_TEST_PROFILES
-    CHECK(motor_runtime_output_profile_count()==0u);
-    for (unsigned id=0u;id<256u;++id) { CHECK(!motor_runtime_arm(id));CHECK(!motor_runtime_pulse()); }
+    CHECK(motor_runtime_output_profile_count()==1u);
     open_window();check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
-    std::puts("PASS production: 0 profiles, all ARM IDs/PULSE/unsolicited IRQs denied; no MOE enable");
+    // 生产profile不可经API调用，只有原始PA12电平的新完整手势可到达。
+    fixed_angle=true;
+    for (unsigned ms=0u;ms<300u;++ms) {
+        for (unsigned i=0u;i<10u;++i) { now_us+=100u;sample(); }
+        motor_runtime_poll_button(false,now_us);
+    }
+    for (unsigned ms=0u;ms<21u;++ms) {
+        for (unsigned i=0u;i<10u;++i) { now_us+=100u;sample(); }
+        motor_runtime_poll_button(true,now_us);
+    }
+    for (unsigned ms=0u;ms<21u;++ms) {
+        for (unsigned i=0u;i<10u;++i) { now_us+=100u;sample(); }
+        motor_runtime_poll_button(false,now_us);
+    }
+    CHECK(status().state==MOTOR_RUNTIME_STARTING);open_window();
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u && early_enables==0u);
+    motor_log_snapshot_t log; motor_action_t action;
+    CHECK(motor_runtime_read_reply(&log,&action));
+    CHECK(action.id==1u && action.reason==MOTOR_ACTION_ACTIVE && (action.timing_flags & 0x80u));
+    for (unsigned i=0u;i<39u;++i) { timer_tick(100u);sample(); }
+    timer_tick(99u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    timer_tick(1u);check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
+    CHECK(motor_runtime_read_reply(&log,&action));
+    CHECK(action.reason==MOTOR_ACTION_DURATION && action.timing_flags==0xc0u);
+    CHECK(action.ended_us-action.requested_us==4000u);
+    for (unsigned ms=0u;ms<60u;++ms) {
+        now_us+=1000u;motor_runtime_poll_button(ms<30u,now_us);
+    }
+    open_window();check_closed();CHECK(enables==1u);
+    // 内部资格/调度调用有耗时，4000us仍从物理释放接受时起算。
+    still_ready();button_steps(true,21u);clock_step=2u;button_steps(false,21u);clock_step=0u;
+    CHECK(motor_runtime_read_reply(&log,&action));open_window();
+    while (now_us-action.requested_us<3800u) { now_us+=100u;sample(); }
+    now_us=action.requested_us+3999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    now_us=action.requested_us+4000u;sample();check_closed();
+    CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_DURATION);
+    // 写MOE后计数推进到拒绝窗，必须由本次复核关闭，不调用测试补救STOP。
+    still_ready();button_steps(true,21u);button_steps(false,21u);delay_after_moe=true;open_window();
+    check_closed();CHECK(enables==1u && status().state==MOTOR_RUNTIME_FAULT);
+    CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_FAULT && action.timing_flags==0xc0u);
+    still_ready();button_steps(true,21u);motor_runtime_stop();button_steps(false,21u);
+    open_window();CHECK(enables==0u && status().state==MOTOR_RUNTIME_DISABLED);
+    CHECK(motor_runtime_read_reply(&log,&action) && action.id==0u);
+    // 超5ms的采样空档不能把未完整的按下手势补成一次触发。
+    still_ready();button_steps(true,21u);now_us+=6000u;
+    motor_runtime_poll_button(false,now_us);button_steps(false,21u);open_window();CHECK(enables==0u);
+    // 开机长按，松开只建立READY；必须再完成一个新手势。
+    reset();fixed_angle=true;button_steps(true,300u);button_steps(false,21u);open_window();CHECK(enables==0u);
+    button_steps(true,21u);button_steps(false,21u);CHECK(status().state==MOTOR_RUNTIME_STARTING);
+    motor_runtime_stop();check_closed();
+    // 弹跳低/高均短于20ms，不得产生尝试。
+    still_ready();
+    for (unsigned i=0u;i<8u;++i) { button_steps(true,2u);button_steps(false,2u); }
+    CHECK(motor_runtime_read_reply(&log,&action) && action.id==0u);open_window();CHECK(enables==0u);
+    // 资格失败也消耗启动机会，后续安静/重新手势不能偷偷重试。
+    reset();button_steps(false,21u);button_steps(true,21u);button_steps(false,21u);
+    CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
+    fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);open_window();CHECK(enables==0u);
+    // 累计原始位移达到46count，实际生产IRQ路径必须撤销，并保留起止有效标志。
+    still_ready();button_steps(true,21u);button_steps(false,21u);open_window();
+    fixed_count=46u;now_us+=100u;sample();check_closed();
+    CHECK(status().state==MOTOR_RUNTIME_FAULT && (status().fault_flags & MOTOR_FAULT_EXPERIMENT));
+    CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_FAULT && action.timing_flags==0xc0u);
+    uint32_t ended=action.ended_us;motor_runtime_stop();
+    CHECK(motor_runtime_read_reply(&log,&action) && action.ended_us==ended);
+    // 本地释放事务寄存器访问中排队STOP，解锁后直接关闭；无补救STOP洗掉证据。
+    still_ready();button_steps(true,21u);trace=true;inject_kind=3u;inject_at=1u;access_count=0u;
+    button_steps(false,21u);trace=false;open_window();check_closed();CHECK(!queued_stop);
+    // 故障拒绝也有一次动作记录；USB-only不能通过按键绕过设备故障。
+    still_ready();motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);button_steps(false,21u);
+    button_steps(true,21u);button_steps(false,21u);open_window();check_closed();
+    CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
+    std::puts("PASS production: local released gesture only, one attempt/boot, four-ms deadline and valid action timestamps");
 #else
     CHECK(motor_runtime_output_profile_count()==1u);
     CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());

@@ -87,7 +87,7 @@ static void reply_done(void)
 
 static unsigned result(void)
 {
-    unsigned value=999u; CHECK(wire_length>=56u);
+    unsigned value=999u; CHECK(wire_length>=95u);
     CHECK(sscanf(wire+17,"%2x",&value)==1); return value;
 }
 
@@ -122,26 +122,26 @@ int main(void)
 
     /* 已借用ACK缓冲不可因新STOP改写，STOP仍立即执行，下一行才回新请求。 */
     start(); feed(vector(1u,1u));
-    for (unsigned i=0u;i<57u;++i) { (void)command_poll(clock_us); }
+    for (unsigned i=0u;i<96u;++i) { (void)command_poll(clock_us); }
     CHECK(board_serial_is_busy()); fake_pwm=true; feed(vector(2u,2u)); CHECK(!fake_pwm);
-    tx_drain(); CHECK(strncmp(wire,"P1R1,00000001,01,",17u)==0);
-    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R1,00000002,02,",17u)==0);
+    tx_drain(); CHECK(strncmp(wire,"P1R2,00000001,01,",17u)==0);
+    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R2,00000002,02,",17u)==0);
 
     /* 同次IRQ的RXNE+TXE：先消费收到的STOP字节，再写回执字节，不能读到自己的TX。 */
     start(); feed(vector(1u,1u));
-    for (unsigned i=0u;i<57u;++i) { (void)command_poll(clock_us); }
+    for (unsigned i=0u;i<96u;++i) { (void)command_poll(clock_us); }
     CHECK(board_serial_is_busy()); fake_pwm=true;
     const char *stop=vector(2u,2u);
     for (unsigned i=0u;i<23u;++i) {
         clock_us+=100u; test_usart.DR=(uint8_t)stop[i]; test_usart.SR=USART_SR_RXNE|USART_SR_TXE;
         USART2_IRQHandler(); wire[wire_length++]=(char)test_usart.DR;
     }
-    CHECK(!fake_pwm); tx_drain(); CHECK(strncmp(wire,"P1R1,00000001,01,",17u)==0);
-    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R1,00000002,02,",17u)==0);
+    CHECK(!fake_pwm); tx_drain(); CHECK(strncmp(wire,"P1R2,00000001,01,",17u)==0);
+    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R2,00000002,02,",17u)==0);
 
     /* 待STOP回执不能被后来的STATUS替换，丢回执标记可见。 */
     start(); feed(vector(2u,2u)); feed(vector(3u,1u)); reply_done();
-    CHECK(strncmp(wire,"P1R1,00000002,02,",17u)==0 && (result() & 128u));
+    CHECK(strncmp(wire,"P1R2,00000002,02,",17u)==0 && (result() & 128u));
 
     start(); feed(vector(1u,3u)); reply_done(); CHECK(result()==4u); fputs(wire,stdout);
     wire_length=0u; feed(vector(2u,4u)); reply_done(); CHECK(result()==4u);
@@ -201,7 +201,7 @@ int main(void)
     for (unsigned i=0u;i<17u;++i) { clock_us+=100u; sample(); telemetry_poll_status(100u); }
     CHECK(board_serial_is_busy()); feed(vector(1u,1u));
     (void)command_poll(clock_us); tx_drain(); CHECK(strncmp(wire,"M3B3,",5u)==0); fputs(wire,stdout);
-    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R1,",5u)==0); fputs(wire,stdout);
+    wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R2,",5u)==0); fputs(wire,stdout);
     CHECK(motor_runtime_read_log(&snap) && snap.state==MOTOR_RUNTIME_DISABLED && snap.feedback_overruns==0u);
     puts("PASS actual runtime/command/UART ISR/TXE/TC integration: STOP priority, CRC/sequence/boundaries/errors/wrap/backpressure/faults; no hardware");
     return 0;
