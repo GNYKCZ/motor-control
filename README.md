@@ -5,7 +5,7 @@
 ## 工程范围
 
 工程、源码、测试及学习笔记都放在本仓库目录内。[STM32F103 M1](firmware/stm32f103/README.md)历史基线只采样。
-当前[首次按键受限动作](docs/first_local_output.md)加入每次启动一次的本地按键profile；串口ARM/PULSE仍拒绝、Reset不自动激励。
+当前[首次按键受限动作](docs/first_local_output_test20.md)加入每次启动一次的本地按键profile；串口ARM/PULSE仍拒绝、Reset不自动激励。
 本批尚未实机验收，未经用户明确安排不下载或操作电机；停止调制不代表功率桥高阻。
 软件构建/测试与板端验证分别记录；M2c固件已烧录并取得有限板端采样观察，尚无可运行的关节仿真模型。
 

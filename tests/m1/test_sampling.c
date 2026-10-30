@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <math.h>
+#include <stdlib.h>
 
 static uint32_t interrupt_mask;       /**< 假设备 PRIMASK，允许验证嵌套恢复。 */
 static uint32_t disable_count;        /**< 禁止调制接口调用次数。 */
@@ -205,11 +206,11 @@ static void test_runtime_states(void)
     first.is_valid = false;
     motor_runtime_handle_sample(&first); /* 首次等待，不把未完成帧当有效测量。 */
     assert(!read_status().has_valid_sample && read_status().state == MOTOR_RUNTIME_DISABLED);
-    motor_runtime_check_deadline(1001u);
+    motor_runtime_check_deadline(10001u);
     assert(read_status().state == MOTOR_RUNTIME_FAULT);
 
     start_runtime();
-    motor_runtime_check_deadline(1001u); /* 完全无 ADC 事件仍能检测。 */
+    motor_runtime_check_deadline(10001u); /* 完全无 ADC 事件仍能检测。 */
     assert(read_status().state == MOTOR_RUNTIME_FAULT);
     start_runtime();
     device_now_us = UINT32_MAX - 100u;
@@ -220,11 +221,11 @@ static void test_runtime_states(void)
     motor_runtime_handle_sample(&first);
     motor_runtime_handle_sample(&second);
     assert(read_status().state == MOTOR_RUNTIME_DISABLED && read_status().sample.sequence == 0u);
-    motor_runtime_check_deadline(351u);
+    motor_runtime_check_deadline(3051u);
     assert(read_status().state == MOTOR_RUNTIME_FAULT);
 
     start_runtime();
-    first = make_sample(1u, 1001u);
+    first = make_sample(1u, 10001u);
     motor_runtime_handle_sample(&first);
     assert(read_status().state == MOTOR_RUNTIME_FAULT); /* 即使首帧有效，迟到仍不能绕过期限。 */
 
@@ -238,7 +239,7 @@ static void test_runtime_states(void)
         if (condition == 2u) second.encoder.read_completed_us = 250u;
         if (condition == 3u) second.encoder.sequence = 1u;
         if (condition == 4u) second.current_completed_us = 100u;
-        if (condition == 5u) second.current_completed_us = 401u;
+        if (condition == 5u) second.current_completed_us = 3101u;
         motor_runtime_handle_sample(&second);
         assert(read_status().state == MOTOR_RUNTIME_FAULT);
     }
@@ -513,7 +514,7 @@ static void test_feedback_integration(void)
     final = read_status();
     assert(final.state == MOTOR_RUNTIME_DISABLED && final.feedback_sequence == 4u);
     assert(final.feedback.continuous_count == 0 && final.feedback.direct_speed_rad_s == 0.0);
-    motor_runtime_check_deadline(final.sample.current_completed_us + 301u);
+    motor_runtime_check_deadline(final.sample.current_completed_us + 3001u);
     assert(!read_status().feedback.is_valid);
     puts("PASS M3b integration: real stride, first/warmup/window, wrap, raw gaps, overrun, fault race, reset/deadline");
 }
@@ -531,8 +532,8 @@ static void test_feedback_publish_age(void)
         device_now_us = time;
         motor_runtime_check_deadline(device_now_us);
         assert(read_status().state == MOTOR_RUNTIME_DISABLED);
-        if (condition % 2u == 0u) device_now_us += 5000u;
-        else advance_after_unlock_us = 5000u; /* 只在poll取邮箱后的解锁发生。 */
+        if (condition % 2u == 0u) device_now_us += 50000u;
+        else advance_after_unlock_us = 50000u; /* 只在poll取邮箱后的解锁发生。 */
         motor_runtime_poll_feedback();
         motor_status_t status = read_status();
         assert(status.state == MOTOR_RUNTIME_FAULT && (status.fault_flags & MOTOR_FAULT_SAMPLE));
@@ -542,8 +543,8 @@ static void test_feedback_publish_age(void)
         assert(strstr(captured_line, "M3B3,s=2,") == captured_line);
         assert(strstr(captured_line, "fp=0,fd=0,fw=0,") != NULL);
     }
-    /* 原始断流门限300us也要在本轮发布时检查，即使反馈年龄尚未达3000us。 */
-    for (uint32_t delay = 300u; delay <= 301u; ++delay) {
+    /* 原始断流门限3000us也要在本轮发布时检查，即使反馈年龄尚未达30000us。 */
+    for (uint32_t delay = 3000u; delay <= 3001u; ++delay) {
         start_runtime();
         motor_sample_t sample = make_sample(1u, 100u);
         motor_runtime_handle_sample(&sample);
@@ -551,8 +552,8 @@ static void test_feedback_publish_age(void)
         motor_runtime_check_deadline(device_now_us);
         device_now_us += delay;
         motor_runtime_poll_feedback();
-        assert(read_status().feedback.is_valid == (delay == 300u));
-        assert(read_status().state == (delay == 300u ? MOTOR_RUNTIME_DISABLED : MOTOR_RUNTIME_FAULT));
+        assert(read_status().feedback.is_valid == (delay == 3000u));
+        assert(read_status().state == (delay == 3000u ? MOTOR_RUNTIME_DISABLED : MOTOR_RUNTIME_FAULT));
     }
     /* 取输入后有正常新帧发布：锁内取当前时间不能把新ADC误判成“来自未来”。 */
     start_runtime();
@@ -566,7 +567,7 @@ static void test_feedback_publish_age(void)
     assert(status.state == MOTOR_RUNTIME_DISABLED && status.feedback.is_valid);
     assert(status.sample.sequence == 2u && status.feedback_sequence == 1u);
     assert(interrupt_mask == 0u);
-    puts("PASS RV-001: current-clock publication, delay before/during compute, time wrap, 300us boundary, fresh IRQ interleave");
+    puts("PASS RV-001: current-clock publication, delay before/during compute, time wrap, 3000us boundary, fresh IRQ interleave");
 }
 
 /** 分步调度oracle：每次前台调用之间插入两个100us原始帧，绝不把主机耗时当板端耗时。 */
@@ -656,6 +657,9 @@ static void test_timing_wrap(void)
 /** 主机入口；断言失败立即非零退出，全部通过才打印最终结果。 */
 int main(void)
 {
+#ifdef _WIN32
+    _set_error_mode(1); /* 主机断言写stderr，避免弹窗阻塞自动回归。 */
+#endif
     test_encoder_frames();
     test_sample_boundaries();
     test_runtime_states();

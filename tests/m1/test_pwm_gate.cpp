@@ -21,7 +21,8 @@ static unsigned advancing_ticks, fraction_ticks;
 static void advance_timer(unsigned ticks)
 {
     for (unsigned i=0u;i<ticks;++i) {
-        if (++fraction_ticks==72u) { fraction_ticks=0u; ++now_us; }
+        fraction_ticks+=10u; /* PSC9：一个TIM1 tick占10个72MHz周期。 */
+        if (fraction_ticks>=72u) { fraction_ticks-=72u; ++now_us; }
         if (pwm_tim1.CR1.value & TIM_CR1_DIR) {
             if (pwm_tim1.CNT.value>0u) { --pwm_tim1.CNT.value; }
             if (pwm_tim1.CNT.value==0u) { pwm_tim1.CR1.value &= ~TIM_CR1_DIR; }
@@ -138,7 +139,7 @@ static void timer_tick(uint32_t delta)
 static void button_steps(bool pressed,unsigned milliseconds)
 {
     for (unsigned ms=0u;ms<milliseconds;++ms) {
-        for (unsigned i=0u;i<10u;++i) { now_us+=100u;sample(); }
+        now_us+=1000u;sample(); /* 测试配置约1kHz真实输入节奏。 */
         motor_runtime_poll_button(pressed,now_us);
     }
 }
@@ -186,22 +187,22 @@ int main()
     motor_log_snapshot_t log; motor_action_t action;
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.id==1u && action.reason==MOTOR_ACTION_ACTIVE && (action.timing_flags & 0x80u));
-    for (unsigned i=0u;i<39u;++i) { timer_tick(100u);sample(); }
-    timer_tick(99u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    for (unsigned i=0u;i<19u;++i) { timer_tick(1000u);sample(); }
+    timer_tick(999u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
     timer_tick(1u);check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.reason==MOTOR_ACTION_DURATION && action.timing_flags==0xc0u);
-    CHECK(action.ended_us-action.requested_us==4000u);
+    CHECK(action.ended_us-action.requested_us==20000u);
     for (unsigned ms=0u;ms<60u;++ms) {
         now_us+=1000u;motor_runtime_poll_button(ms<30u,now_us);
     }
     open_window();check_closed();CHECK(enables==1u);
-    // 内部资格/调度调用有耗时，4000us仍从物理释放接受时起算。
+    // 内部资格/调度调用有耗时，20000us仍从物理释放接受时起算。
     still_ready();button_steps(true,21u);clock_step=2u;button_steps(false,21u);clock_step=0u;
     CHECK(motor_runtime_read_reply(&log,&action));open_window();
-    while (now_us-action.requested_us<3800u) { now_us+=100u;sample(); }
-    now_us=action.requested_us+3999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
-    now_us=action.requested_us+4000u;sample();check_closed();
+    while (now_us-action.requested_us<19800u) { now_us+=100u;sample(); }
+    now_us=action.requested_us+19999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    now_us=action.requested_us+20000u;sample();check_closed();
     CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_DURATION);
     // 写MOE后计数推进到拒绝窗，必须由本次复核关闭，不调用测试补救STOP。
     still_ready();button_steps(true,21u);button_steps(false,21u);delay_after_moe=true;open_window();
@@ -214,8 +215,8 @@ int main()
     trace=true;access_count=0u;TIM1_CC_IRQHandler();trace=false;unsigned deadline_points=access_count;
     for (unsigned at=1u;at<=deadline_points;++at) {
         still_ready();button_steps(true,21u);button_steps(false,21u);
-        CHECK(motor_runtime_read_reply(&log,&action));forced_deadline=action.requested_us+4000u;
-        for (unsigned i=0u;i<39u;++i) { now_us+=100u;sample(); }
+        CHECK(motor_runtime_read_reply(&log,&action));forced_deadline=action.requested_us+20000u;
+        for (unsigned i=0u;i<199u;++i) { now_us+=100u;sample(); }
         now_us=forced_deadline-1u;
         natural_update();TIM1_UP_IRQHandler();pwm_tim1.CNT.value=1049u;pwm_tim1.SR.value|=TIM_SR_CC4IF;
         trace=true;inject_kind=4u;inject_at=at;access_count=0u;TIM1_CC_IRQHandler();trace=false;
@@ -255,7 +256,7 @@ int main()
     still_ready();motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);button_steps(false,21u);
     button_steps(true,21u);button_steps(false,21u);open_window();check_closed();
     CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
-    std::puts("PASS production: local released gesture only, one attempt/boot, four-ms deadline and valid action timestamps");
+    std::puts("PASS production: local released gesture only, one attempt/boot, twenty-ms deadline and valid action timestamps");
 #else
     CHECK(motor_runtime_output_profile_count()==1u);
     CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());
@@ -289,16 +290,16 @@ int main()
     pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();check_closed();CHECK(status().state==MOTOR_RUNTIME_FAULT);
     CHECK(status().fault_flags==(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW));
     /* main完全停滞，TIM3在raw年龄301us独立停机；300us仍未超过旧门限。 */
-    reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
-    timer_tick(300u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    reset();CHECK(motor_runtime_arm(1u));
+    timer_tick(3000u);CHECK(status().state==MOTOR_RUNTIME_ARMED);
     timer_tick(1u);check_closed();CHECK(status().fault_flags & MOTOR_FAULT_SAMPLE);
     /* ADC仍推进而不调用前台deadline：PULSE目标1000us不可因样本/STATUS延长。 */
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
     for (unsigned i=0u;i<9u;++i) { timer_tick(100u);sample(); }
     timer_tick(99u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);timer_tick(1u);check_closed();
     CHECK(status().state==MOTOR_RUNTIME_DISABLED && !motor_runtime_pulse());
-    reset(0xffffd800u);CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
-    timer_tick(301u);check_closed();CHECK(status().state==MOTOR_RUNTIME_FAULT);
+    reset(0xffffd800u);CHECK(motor_runtime_arm(1u));
+    timer_tick(3001u);check_closed();CHECK(status().state==MOTOR_RUNTIME_FAULT);
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
     command_receive_error();check_closed();CHECK(status().fault_flags & MOTOR_FAULT_COMMUNICATION);
     reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();
@@ -329,7 +330,7 @@ int main()
         motor_runtime_init();open_window();CHECK(status().state==MOTOR_RUNTIME_BOOT);check_closed();
     }
     reset();pwm_gpiob.IDR.value=0u;CHECK(!motor_runtime_arm(1u));check_closed();
-    reset();now_us+=301u;CHECK(!motor_runtime_arm(1u));check_closed();
+    reset();now_us+=3001u;CHECK(!motor_runtime_arm(1u));check_closed();
     reset();board_pwm_ticks_t invalid={65535u,0u,0u,40u};CHECK(!board_prepare_pulse(invalid,1u));check_closed();
     reset();invalid.u=0u;invalid.margin_ticks=0u;CHECK(!board_prepare_pulse(invalid,1u));check_closed();
     reset();pwm_tim3.CNT.value=65530u;CHECK(board_schedule_deadline(now_us+70000u));

@@ -119,7 +119,7 @@ def main():
     own_paths += list(shared_files) + [root / "docs/m2c_sensor_contract.md", root / "docs/m2c_sampling_check.md"]
     own_paths += [root / name for name in ("tools/test_sensor_input.py", "tools/sensor_capture.py",
                   "tests/control_core/test_sensor_input.c", "tests/m1/test_sensor_capture.py", "tests/m1/synthetic_m2c.txt", "docs/m3b_feedback_integration.md", "docs/m3b_timing_check.md", "docs/m3b3_compact_log.md", "tests/m1/test_telemetry_compact.c")]
-    own_paths += [root / name for name in ("docs/first_local_output.md", "docs/p1a2a_pwm_preparation.md", "tools/test_pwm_gate.py",
+    own_paths += [root / name for name in ("docs/first_local_output_test20.md", "docs/first_local_output.md", "docs/p1a2a_pwm_preparation.md", "tools/test_pwm_gate.py",
                   "tests/m1/test_pwm_gate.cpp", "tests/m1/pwm_model/main.h", "tests/m1/pwm_model/linkage.h", "tests/m1/runtime_gate_stub.c")]
     own_paths += [root / name for name in ("tools/command_link.py", "tools/test_command.py",
                   "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md",
@@ -142,7 +142,7 @@ def main():
                  root / "docs/cubemx_validation.md", root / "docs/m2c_sensor_contract.md",
                  root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", root / "docs/m3b3_compact_log.md", firmware / "README.md", firmware / "SOURCES.md"]
     documents += [root / "docs/p1a1_command_link.md"]
-    documents += [root / "docs/p1a2a_pwm_preparation.md", root / "docs/first_local_output.md"]
+    documents += [root / "docs/p1a2a_pwm_preparation.md", root / "docs/first_local_output.md", root / "docs/first_local_output_test20.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")
