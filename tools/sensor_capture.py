@@ -46,8 +46,8 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
-    if raw.startswith((b"P1Z1,", b"P1I1,")):
-        current = raw.startswith(b"P1I1,")
+    if raw.startswith((b"P1Z1,", b"P1I1,", b"P1V1,")):
+        current = not raw.startswith(b"P1Z1,")
         widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8]
         keys = "q c r s f n t cn su sv umin umax vmin vmax fl scale beg end cfg".split()
         if current:
@@ -98,7 +98,7 @@ def parse_line(raw):
                 raise ValueError("P1I1 capture time/gap mismatch")
             if count and ((fields["t"]-fields["iend"]) & 0xFFFFFFFF) >= 0x80000000:
                 raise ValueError("P1I1 snapshot predates capture")
-        return {"format": "P1I1" if current else "P1Z1", **fields}
+        return {"format": raw[:4].decode("ascii"), **fields}
     if raw.startswith(b"P1R2,"):
         widths = [8, 2, 2, 2, 8, 8, 8, 8, 8, 8, 8, 2, 4]
         pattern = b"P1R2," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"

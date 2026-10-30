@@ -1,4 +1,4 @@
-/** 固定P1C1 23B / P1R2 95B / P1Z1 138B / P1I1 221B；无printf、浮点或动态分配。
+/** 固定P1C1 23B / P1R2 95B / P1Z1 138B / P1V1 221B；无printf、浮点或动态分配。
  * RX状态仅在UART IRQ/短临界区修改；TX缓冲只由前台修改，TC前保持借用。 */
 #include "command.h"
 #include "board_io.h"
@@ -157,7 +157,7 @@ static char hex_digit(uint32_t value, unsigned shift)
 static char reply_character(unsigned i)
 {
     if (reply.code==REQUEST_ZERO_STATUS || reply.code==REQUEST_CURRENT_STATUS) {
-        const char *prefix=reply.code==REQUEST_ZERO_STATUS ? "P1Z1," : "P1I1,";
+        const char *prefix=reply.code==REQUEST_ZERO_STATUS ? "P1Z1," : "P1V1,";
         if (i<5u) { return prefix[i]; }
         if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u
             || i==54u || i==63u || i==72u || i==77u || i==82u || i==87u || i==92u

@@ -60,8 +60,10 @@ def main():
             if not synthetic:
                 # 带流RV-001：旧实现只看ADC完成时间，同一跨开门边界夹具必须失败。
                 old_runtime = output / "current_boundary_old.c"
-                old_runtime.write_bytes(subprocess.check_output(["git", "show",
-                    "7c41d93459dc0ac42a9fdbffeac51591fb794d60:firmware/stm32f103/app/motor_runtime.c"], cwd=root))
+                old_source = subprocess.check_output(["git", "show",
+                    "7c41d93459dc0ac42a9fdbffeac51591fb794d60:firmware/stm32f103/app/motor_runtime.c"], cwd=root)
+                # 仅对齐本版V矢量；不改旧采集判据，确保仍命中跨开门边界反例。
+                old_runtime.write_bytes(old_source.replace(b"{{60u,0u,0u,434u}", b"{{0u,60u,0u,434u}"))
                 old_runtime_obj = output / "current_boundary_old.o"
                 run([gcc, "-std=c11", *flags, "-c", old_runtime, "-o", old_runtime_obj])
                 old_capture_exe = output / "current_boundary_old.exe"
