@@ -76,3 +76,23 @@ except ValueError:
 else:
     raise AssertionError("different supply silently combined")
 print("PASS repetition: independent same-condition batches, duplicate/order/config rejection; no automatic calibration pass")
+
+# 带流查询的独立手算帧：19帧U2100/V1990，零偏2027/2028，差值+73/-38 count。
+from sensor_capture import parse_line
+prefix = ("P1I1,00000004,07,00,01,00000000,000002BC,000AAE60,0200,000FD600,000FD800,"
+          "07EB,07EB,07EC,07EC,19,000C4B20,00000000,0007CC18,00020001,0013,"
+          f"{19*2100:08X},{19*1990:08X},0834,0834,07C6,07C6,00092C0C,0009725C,0FFF,0FFF,00,00000001,").encode()
+frame = prefix + f"{binascii.crc_hqx(prefix,0xFFFF):04X}\r\n".encode()
+current = parse_line(frame)
+assert len(frame) == 221 and current["ic"] == 19
+assert current["isu"]/19-current["su"]/512 == 73
+assert current["isv"]/19-current["sv"]/512 == -38
+for bad_prefix in (prefix.replace(b"0013,",b"0021,"), prefix.replace(b"0834,0834,",b"0835,0834,"),
+                   prefix.replace(b"0FFF,0FFF,00,00000001,",b"4000,0FFF,00,")):
+    try:
+        parse_line(bad_prefix + f"{binascii.crc_hqx(bad_prefix,0xFFFF):04X}\r\n".encode())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid current capture accepted despite recomputed CRC")
+print("PASS P1I1: independent nonempty sums/signs, count/range/angle rejection")

@@ -88,13 +88,13 @@ static motor_status_t status()
 {
     motor_status_t s;CHECK(motor_runtime_read_status(&s));return s;
 }
-static void sample(bool poll=true)
+static void sample(bool poll=true,uint16_t raw_u=2027u,uint16_t raw_v=2028u)
 {
     ++sequence;
     board_encoder_frame_t e={};
     e.sequence=sequence;e.raw_angle_count=fixed_angle ? fixed_count : (uint16_t)(sequence & 16383u);
     e.read_started_us=now_us-50u;e.read_completed_us=now_us-28u;e.is_valid=true;
-    motor_sample_t s=board_make_sample(sequence,now_us,2027u,2028u,&e);
+    motor_sample_t s=board_make_sample(sequence,now_us,raw_u,raw_v,&e);
     motor_runtime_handle_sample(&s);
     if (poll) { motor_runtime_poll_feedback(); }
 }
@@ -203,16 +203,29 @@ int main()
     motor_log_snapshot_t log; motor_action_t action;
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.id==1u && action.reason==MOTOR_ACTION_ACTIVE && (action.timing_flags & 0x80u));
-    for (unsigned i=0u;i<19u;++i) { timer_tick(1000u);sample(); }
+    for (unsigned i=0u;i<19u;++i) { timer_tick(1000u);sample(true,2100u,1990u); }
     timer_tick(999u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
     timer_tick(1u);check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.reason==MOTOR_ACTION_DURATION && action.timing_flags==0xc0u);
     CHECK(action.ended_us-action.requested_us==20000u);
+    motor_zero_snapshot_t current_zero;motor_current_snapshot_t current;
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==19u && current.samples.sum_u_count==19u*2100u
+        && current.samples.sum_v_count==19u*1990u && !current.overflow && current.action_id==action.id);
+    CHECK(current.began_us-action.started_us==1000u && current.ended_us-current.began_us==18000u);
+    now_us+=1000u;sample();CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==19u); /* 关闭后的样本不能污染诊断。 */
     for (unsigned ms=0u;ms<60u;++ms) {
         now_us+=1000u;motor_runtime_poll_button(ms<30u,now_us);
     }
     open_window();check_closed();CHECK(enables==1u);
+    // 超容量只标诊断溢出，不覆盖前32帧，也不改变已有动作门控。
+    still_ready();button_steps(true,21u);button_steps(false,21u);open_window();
+    for (unsigned i=0u;i<33u;++i) { now_us+=100u;sample(true,2100u,1990u); }
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==32u && current.samples.sum_u_count==32u*2100u && current.overflow==1u);
+    motor_runtime_stop();check_closed();
     // 内部资格/调度调用有耗时，20000us仍从物理释放接受时起算。
     still_ready();button_steps(true,21u);clock_step=2u;button_steps(false,21u);clock_step=0u;
     CHECK(motor_runtime_read_reply(&log,&action));open_window();

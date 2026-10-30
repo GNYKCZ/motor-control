@@ -46,17 +46,24 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
-    if raw.startswith(b"P1Z1,"):
-        widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8, 4]
-        pattern = b"P1Z1," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
+    if raw.startswith((b"P1Z1,", b"P1I1,")):
+        current = raw.startswith(b"P1I1,")
+        widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8]
+        keys = "q c r s f n t cn su sv umin umax vmin vmax fl scale beg end cfg".split()
+        if current:
+            widths += [4, 8, 8, 4, 4, 4, 4, 8, 8, 4, 4, 2, 8]
+            keys += "ic isu isv iumin iumax ivmin ivmax ibeg iend a0 a1 overflow iid".split()
+        widths += [4]
+        keys += ["crc"]
+        pattern = raw[:5] + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
         match = re.fullmatch(pattern, raw)
-        if not match or len(raw) != 138:
+        if not match or len(raw) != (221 if current else 138):
             raise ValueError("P1Z1 layout mismatch")
         values = [int(value, 16) for value in match.groups()]
-        if binascii.crc_hqx(raw[:132], 0xFFFF) != values[-1]:
+        if binascii.crc_hqx(raw[:-6], 0xFFFF) != values[-1]:
             raise ValueError("P1Z1 CRC mismatch")
-        fields = dict(zip("q c r s f n t cn su sv umin umax vmin vmax fl scale beg end cfg crc".split(), values))
-        if fields["c"] != 5 or fields["s"] > 5 or fields["r"] & 0x7F > 7 or fields["cn"] > 512:
+        fields = dict(zip(keys, values))
+        if fields["c"] != (7 if current else 5) or fields["s"] > 5 or fields["r"] & 0x7F > 7 or fields["cn"] > 512:
             raise ValueError("P1Z1 command/state/count out of range")
         count, flags = fields["cn"], fields["fl"]
         if flags & ~31 or not flags & 8 or bool(flags & 1) != (count == 512):
@@ -73,7 +80,25 @@ def parse_line(raw):
             raise ValueError("P1Z1 candidate time order/gap mismatch")
         if count and (fields["t"] - fields["end"]) & 0xFFFFFFFF >= 0x80000000:
             raise ValueError("P1Z1 snapshot predates candidate")
-        return {"format": "P1Z1", **fields}
+        if current:
+            count = fields["ic"]
+            if count > 32 or fields["overflow"] > 1 or max(fields["a0"], fields["a1"]) > 16383:
+                raise ValueError("P1I1 count/angle/overflow mismatch")
+            if fields["overflow"] and count != 32:
+                raise ValueError("P1I1 overflow without full buffer")
+            if count and not fields["iid"]:
+                raise ValueError("P1I1 missing action identity")
+            if not count and any(fields[k] for k in keys if k.startswith("i") or k in ("a0", "a1", "overflow")):
+                raise ValueError("P1I1 empty capture contradicts data")
+            for channel in ("u", "v"):
+                lo, hi, total = (fields[k] for k in ("i"+channel+"min", "i"+channel+"max", "is"+channel))
+                if not 0 <= lo <= hi <= 4095 or not count*lo <= total <= count*hi:
+                    raise ValueError("P1I1 sum/range mismatch")
+            if count and ((fields["iend"]-fields["ibeg"]) & 0xFFFFFFFF) > (count-1)*3000:
+                raise ValueError("P1I1 capture time/gap mismatch")
+            if count and ((fields["t"]-fields["iend"]) & 0xFFFFFFFF) >= 0x80000000:
+                raise ValueError("P1I1 snapshot predates capture")
+        return {"format": "P1I1" if current else "P1Z1", **fields}
     if raw.startswith(b"P1R2,"):
         widths = [8, 2, 2, 2, 8, 8, 8, 8, 8, 8, 8, 2, 4]
         pattern = b"P1R2," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"

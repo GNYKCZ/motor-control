@@ -79,7 +79,7 @@ static void tx_drain(void)
 
 static void reply_done(void)
 {
-    for (unsigned i=0u;i<150u;++i) {
+    for (unsigned i=0u;i<230u;++i) {
         clock_us+=100u; if (live_samples) { sample(); }
         (void)command_poll(clock_us);
         if (board_serial_is_busy()) { tx_drain(); }
@@ -221,5 +221,8 @@ int main(void)
     uint32_t began=zero.began_us;wire_length=0u;feed(vector(1u,6u));reply_done();
     CHECK(result()==3u && motor_runtime_read_zero(&snap,&zero) && zero.began_us==began);
     CHECK(!fake_pwm); /* 重放ZERO_RESTART不能重开候选，更不能激励。 */
+    start();before=disables;feed(vector(1u,7u));reply_done();
+    CHECK(wire_length==221u && result()==0u && disables==before && !fake_pwm);
+    CHECK(strncmp(wire,"P1I1,",5u)==0);fputs(wire,stdout);
     return 0;
 }
