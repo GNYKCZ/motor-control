@@ -1,4 +1,4 @@
-/** 固定P1C1 23B / P1R2 95B / P1Z1 138B；无printf、浮点、扫描或动态分配。
+/** 固定P1C1 23B / P1R2 95B / P1Z1 138B / P1I1 221B；无printf、浮点或动态分配。
  * RX状态仅在UART IRQ/短临界区修改；TX缓冲只由前台修改，TC前保持借用。 */
 #include "command.h"
 #include "board_io.h"
@@ -7,7 +7,8 @@
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
        REPLY_DENIED=4, REPLY_UART=5, REPLY_TIMEOUT=6, REPLY_SNAPSHOT=7 };
-enum { REQUEST_STATUS=1, REQUEST_STOP=2, REQUEST_ZERO_STATUS=5, REQUEST_ZERO_RESTART=6, REPLY_LOST=128 };
+enum { REQUEST_STATUS=1, REQUEST_STOP=2, REQUEST_ZERO_STATUS=5, REQUEST_ZERO_RESTART=6,
+       REQUEST_CURRENT_STATUS=7, REPLY_LOST=128 };
 typedef struct { uint32_t sequence; uint8_t code, result; } reply_event_t;
 static unsigned rx_index;
 static uint32_t rx_sequence, rx_started_us, rx_last_us, last_sequence;
@@ -16,7 +17,7 @@ static uint8_t rx_code;
 static bool rx_bad, rx_drop, have_sequence;
 static bool reply_pending;
 static reply_event_t pending_reply;
-static char reply_line[138];
+static char reply_line[221];
 static unsigned reply_length;
 static unsigned reply_index;
 static bool reply_building, reply_borrowed;
@@ -25,6 +26,7 @@ static reply_event_t reply;
 static motor_log_snapshot_t reply_status;
 static motor_action_t reply_action;
 static motor_zero_snapshot_t reply_zero;
+static motor_current_snapshot_t reply_current;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -129,7 +131,8 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
                 have_sequence=true; last_sequence=rx_sequence;
                 if (rx_code==REQUEST_ZERO_RESTART) {
                     if (!motor_runtime_restart_zero()) { result=REPLY_DENIED; }
-                } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS) {
+                } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS
+                           && rx_code!=REQUEST_CURRENT_STATUS) {
                     result=REPLY_DENIED;
                 }
             }
@@ -153,8 +156,8 @@ static char hex_digit(uint32_t value, unsigned shift)
 /** 固定位置输出一字符；状态已经冻结，不在组帧过程中混读运行状态。 */
 static char reply_character(unsigned i)
 {
-    if (reply.code==REQUEST_ZERO_STATUS) {
-        static const char prefix[]="P1Z1,";
+    if (reply.code==REQUEST_ZERO_STATUS || reply.code==REQUEST_CURRENT_STATUS) {
+        const char *prefix=reply.code==REQUEST_ZERO_STATUS ? "P1Z1," : "P1I1,";
         if (i<5u) { return prefix[i]; }
         if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u
             || i==54u || i==63u || i==72u || i==77u || i==82u || i==87u || i==92u
@@ -178,6 +181,25 @@ static char reply_character(unsigned i)
         if (i<=112u) { return hex_digit(reply_zero.began_us,(112u-i)*4u); }
         if (i<=121u) { return hex_digit(reply_zero.ended_us,(121u-i)*4u); }
         if (i<=130u) { return hex_digit(reply_zero.profile_id,(130u-i)*4u); }
+        if (reply.code==REQUEST_CURRENT_STATUS) {
+            if (i==136u || i==145u || i==154u || i==159u || i==164u || i==169u
+                || i==174u || i==183u || i==192u || i==197u || i==202u || i==205u || i==214u) { return ','; }
+            if (i<=135u) { return hex_digit(reply_current.samples.accepted_count,(135u-i)*4u); }
+            if (i<=144u) { return hex_digit(reply_current.samples.sum_u_count,(144u-i)*4u); }
+            if (i<=153u) { return hex_digit(reply_current.samples.sum_v_count,(153u-i)*4u); }
+            if (i<=158u) { return hex_digit(reply_current.samples.minimum_u_count,(158u-i)*4u); }
+            if (i<=163u) { return hex_digit(reply_current.samples.maximum_u_count,(163u-i)*4u); }
+            if (i<=168u) { return hex_digit(reply_current.samples.minimum_v_count,(168u-i)*4u); }
+            if (i<=173u) { return hex_digit(reply_current.samples.maximum_v_count,(173u-i)*4u); }
+            if (i<=182u) { return hex_digit(reply_current.began_us,(182u-i)*4u); }
+            if (i<=191u) { return hex_digit(reply_current.ended_us,(191u-i)*4u); }
+            if (i<=196u) { return hex_digit(reply_current.first_angle,(196u-i)*4u); }
+            if (i<=201u) { return hex_digit(reply_current.last_angle,(201u-i)*4u); }
+            if (i<=204u) { return hex_digit(reply_current.overflow,(204u-i)*4u); }
+            if (i<=213u) { return hex_digit(reply_current.action_id,(213u-i)*4u); }
+            if (i<=218u) { return hex_digit(reply_crc,(218u-i)*4u); }
+            return i==219u ? '\r' : '\n';
+        }
         if (i<=135u) { return hex_digit(reply_crc,(135u-i)*4u); }
         return i==136u ? '\r' : '\n';
     }
@@ -220,8 +242,11 @@ bool command_poll(uint32_t now_us)
         }
         reply_length=95u;
         if (reply.code==REQUEST_ZERO_STATUS) {
-            reply_length=sizeof(reply_line);
+            reply_length=138u;
             if (!motor_runtime_read_zero(&reply_status,&reply_zero)) { reply.result=REPLY_SNAPSHOT; }
+        } else if (reply.code==REQUEST_CURRENT_STATUS) {
+            reply_length=sizeof(reply_line);
+            if (!motor_runtime_read_current(&reply_status,&reply_zero,&reply_current)) { reply.result=REPLY_SNAPSHOT; }
         }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;

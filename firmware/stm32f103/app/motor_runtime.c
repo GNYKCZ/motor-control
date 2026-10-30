@@ -23,6 +23,7 @@ static bool motor_runtime_pulse(void);
 static motor_action_t last_action;
 static uint32_t zero_began_us, zero_ended_us;
 static bool zero_explicit;
+static motor_current_snapshot_t current_capture;
 static bool button_spent, button_raw, button_seen, still_seen, fault_seen;
 static unsigned button_phase; /**< 0等稳定释放，1READY，2PRESSED；spent独立锁住本启动机会。 */
 static uint32_t button_last_us, button_changed_us, still_since_us;
@@ -165,6 +166,7 @@ void motor_runtime_init(void)
     last_action=(motor_action_t){0}; button_spent=false; button_phase=0u; button_seen=false;
     zero_began_us=0u; zero_ended_us=0u;
     zero_explicit=false;
+    current_capture=(motor_current_snapshot_t){0};
     still_seen=false; fault_seen=false; position_count=0; still_min=0; still_max=0;
     output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
     board_cancel_deadline();
@@ -361,6 +363,24 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         if (runtime_status.has_valid_sample) {
             is_valid = is_valid && board_sequence_is_newer(sample->encoder.sequence,
                 runtime_status.sample.encoder.sequence);
+        }
+    }
+    /* 先保留触发位移保护的最后一个有效样本；尚未开门/截止后的数据不得冒充带流。
+     * 最多32帧，仅整数和/极值，无IRQ格式化；超容量冻结并标记，不覆盖早期证据。 */
+    if (is_valid && runtime_status.state==MOTOR_RUNTIME_ACTIVE && (last_action.timing_flags & 0x80u)
+        && sample->current_completed_us-last_action.started_us<0x80000000u
+        && (int32_t)(sample->current_completed_us-pulse_deadline_us)<0) {
+        sensor_offset_t *stats=&current_capture.samples;
+        if (stats->accepted_count>=32u) { current_capture.overflow=1u; }
+        else {
+            if (stats->accepted_count==0u) {
+                current_capture.began_us=sample->current_completed_us;
+                current_capture.action_id=last_action.id;
+                current_capture.first_angle=sample->encoder.raw_angle_count;
+            }
+            (void)sensor_offset_add(stats,sample->raw_current_u_count,sample->raw_current_v_count,true);
+            current_capture.ended_us=sample->current_completed_us;
+            current_capture.last_angle=sample->encoder.raw_angle_count;
         }
     }
     if (is_valid) {
@@ -615,5 +635,15 @@ bool motor_runtime_read_zero(motor_log_snapshot_t *status, motor_zero_snapshot_t
         | (runtime_status.offset_is_aborted ? 2u : 0u)
         | (runtime_status.state==MOTOR_RUNTIME_DISABLED && runtime_status.fault_flags==0u && still_seen
            && board_get_time_us()-still_since_us>=250000u && input_data_are_valid() ? 4u : 0u));
+    board_leave_critical(mask); return valid;
+}
+
+bool motor_runtime_read_current(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero,
+                                motor_current_snapshot_t *current)
+{
+    if (status==NULL || zero==NULL || current==NULL) { return false; }
+    uint32_t mask=board_enter_critical();
+    bool valid=motor_runtime_read_zero(status,zero);
+    *current=current_capture;
     board_leave_critical(mask); return valid;
 }

@@ -111,6 +111,12 @@ typedef struct { sensor_offset_t offset; uint32_t began_us, ended_us, profile_id
     uint8_t flags; /**< bit0满批、bit1中止、bit2静止辅助、bit3名义增益、bit4显式重开批次。 */
 } motor_zero_snapshot_t;
 bool motor_runtime_read_zero(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero);
+/** 固定U矢量输出期间的有界原始统计；只用于诊断，不应用零偏、不作为闭环/峰值保护。 */
+typedef struct { sensor_offset_t samples; uint32_t began_us, ended_us, action_id;
+    uint16_t first_angle, last_angle; uint8_t overflow; } motor_current_snapshot_t;
+/** 与零偏/运行态在同一短锁冻结；输出开始前/关闭后的样本不加入统计。 */
+bool motor_runtime_read_current(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero,
+                                motor_current_snapshot_t *current);
 /** 仅DISABLED/无故障/新鲜静止/尚无动作时重开候选批，不改变输出资格。 */
 bool motor_runtime_restart_zero(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
