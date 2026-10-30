@@ -58,6 +58,21 @@ def main():
             run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
             run([exe])
             if not synthetic:
+                # 带流RV-001：旧实现只看ADC完成时间，同一跨开门边界夹具必须失败。
+                old_runtime = output / "current_boundary_old.c"
+                old_runtime.write_bytes(subprocess.check_output(["git", "show",
+                    "7c41d93459dc0ac42a9fdbffeac51591fb794d60:firmware/stm32f103/app/motor_runtime.c"], cwd=root))
+                old_runtime_obj = output / "current_boundary_old.o"
+                run([gcc, "-std=c11", *flags, "-c", old_runtime, "-o", old_runtime_obj])
+                old_capture_exe = output / "current_boundary_old.exe"
+                run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, old_runtime_obj, *objects[1:], "-lm", "-o", old_capture_exe])
+                bad_capture = subprocess.run([str(old_capture_exe)], cwd=root, env=environment,
+                                             capture_output=True, text=True, timeout=30)
+                if bad_capture.returncode == 0 or "current.samples.accepted_count==0u" not in bad_capture.stderr:
+                    raise RuntimeError("current boundary regression did not reject completion-only capture")
+                evidence["current_boundary_RV001"] = {"returncode": bad_capture.returncode,
+                    "output": bad_capture.stdout + bad_capture.stderr,
+                    "runtime_sha256": hashlib.sha256(old_runtime.read_bytes()).hexdigest()}
                 # 原真实board实现+新推进时钟回归：旧比较点不能通过同一压力场景。
                 baseline = output / "window_old_board.cpp"
                 baseline.write_bytes(subprocess.check_output(["git", "show",
