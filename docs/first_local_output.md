@@ -1,5 +1,8 @@
 # 首次本地按键受限动作
 
+本页保留4ms配置及现场失败历史。用户随后授权的当前测试配置见
+[20ms低频测试配置](first_local_output_test20.md)，本页旧频率/期限不用于当前固件验收。
+
 Refs [Issue #1](https://github.com/GNYKCZ/motor-control/issues/1)。复用PR #22门控，基于main
 `fec269afd41b8bd816f45ddcafd493372fef1c5f`；本批不是电流闭环、自动对齐或位置保持。
 实现初始设计由用户重新委托Design，电机规格来自用户提供的本配套商品截图；未独立标定。

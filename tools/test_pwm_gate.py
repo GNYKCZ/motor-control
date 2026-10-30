@@ -76,6 +76,12 @@ def main():
         # RV-001反例：在Break处理后故意留下MOE，旧测试补救STOP会洗掉，新测试必须当场失败。
         # 只改变测试夹具的模拟寄存器，不改生产board/runtime/command，也不宣称真实固件有此缺陷。
         old = subprocess.check_output(["git", "show", "77e27db1c4f9aeb5109a610962707943de9fe94b:tests/m1/test_pwm_gate.cpp"], cwd=root).decode("utf-8")
+        # 旧夹具保留其补救STOP行为，仅把原始失联场景对齐本次3ms契约；用ARM避免1ms合成脉冲先到期。
+        old = old.replace("reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();\n    timer_tick(300u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);",
+                          "reset();CHECK(motor_runtime_arm(1u));\n    timer_tick(3000u);CHECK(status().state==MOTOR_RUNTIME_ARMED);")
+        old = old.replace("reset(0xffffd800u);CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();",
+                          "reset(0xffffd800u);CHECK(motor_runtime_arm(1u));")
+        old = old.replace("timer_tick(301u);", "timer_tick(3001u);").replace("now_us+=301u;", "now_us+=3001u;")
         current = (root / "tests/m1/test_pwm_gate.cpp").read_text(encoding="utf-8")
         anchor = "if (kind==2u) { TIM1_BRK_IRQHandler(); }"
         oracle = {}

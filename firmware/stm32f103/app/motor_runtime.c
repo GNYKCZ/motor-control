@@ -16,7 +16,7 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 #endif
 #ifndef MOTOR_GATE_TEST_PROFILES
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
-static const pwm_profile_t local_profile = {{60u,0u,0u,434u},1000u,4000u};
+static const pwm_profile_t local_profile = {{60u,0u,0u,434u},5000u,20000u};
 static bool motor_runtime_arm(unsigned profile_id);
 static bool motor_runtime_pulse(void);
 #endif
