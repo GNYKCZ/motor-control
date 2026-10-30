@@ -10,7 +10,7 @@
 #define BOARD_ENCODER_AGE_LIMIT_US 200u     /**< 从读取开始到 ADC 完成的最大年龄，未实测。 */
 #define BOARD_SAMPLE_GAP_LIMIT_US 3000u     /**< 测试配置正常约 999.44 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 10000u   /**< 测试配置首个完整有效帧最多等待 10 ms，时间由设备计数。 */
-#define BOARD_TELEMETRY_PERIOD_MS 100u      /**< 前台每 100 ms 尝试导出一次，不影响 ADC 频率。 */
+#define BOARD_TELEMETRY_PERIOD_MS 1000u     /**< 前台每秒尝试导出一次；不影响采样或命令回执。 */
 #define BOARD_SERIAL_BUFFER_BYTES 256u     /**< M3B3协议最长169B；任意16个uint32也至多237B。 */
 #define BOARD_FEEDBACK_DIVIDER 10u         /**< 每10个完整有效原始帧交接一次，测试配置约100Hz，非严格周期保证。 */
 #define BOARD_FEEDBACK_GAP_LIMIT_US 30000u /**< 测试配置抽帧实际中点间隔上限，不能覆盖原始流失帧。 */

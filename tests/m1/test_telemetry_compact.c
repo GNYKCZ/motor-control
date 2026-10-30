@@ -42,6 +42,7 @@ bool board_start_serial_write(const char *bytes, uint32_t length)
 
 static void emit(uint32_t ms)
 {
+    ms *= 10u; /* 仅把格式/拥塞工况的导出时间映射到1秒周期。 */
     for (unsigned i = 0u; i < 17u; ++i) { telemetry_poll_status(ms); }
 }
 
@@ -80,9 +81,9 @@ int main(void)
     supplied.direct_is_valid = supplied.window_is_valid = false;
     supplied.feedback_overruns = supplied.feedback_max_us = supplied.mailbox_max_us = UINT32_MAX;
     busy = false;
-    for (unsigned i = 0u; i < 16u; ++i) { telemetry_poll_status(1000u); }
+    for (unsigned i = 0u; i < 16u; ++i) { telemetry_poll_status(10000u); }
     read_increment = UINT32_MAX; /* 最后一个字段单步观测最大值，固定ID=16。 */
-    telemetry_poll_status(1000u); CHECK(busy); read_increment = 0u;
+    telemetry_poll_status(10000u); CHECK(busy); read_increment = 0u;
     busy = false; emit(1100u);
     CHECK(strcmp(captured,
         "M3B3,s=2,f=4294967295,n=4294967295,t=4294967295,u=65535,v=65535,a=65535,"

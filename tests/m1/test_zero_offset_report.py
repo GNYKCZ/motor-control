@@ -8,13 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from zero_offset_report import summarize, compare_reports
 
 
-def line(i, u=2000, v=2100, angle=16383, state=1, fault=0):
-    return (f"M3B3,s={state},f={fault},n={i+1},t={(0xFFFF0000+i*100000)&0xFFFFFFFF},"
+def line(i, u=2000, v=2100, angle=16383, state=1, fault=0, interval_us=100000):
+    return (f"M3B3,s={state},f={fault},n={i+1},t={(0xFFFF0000+i*interval_us)&0xFFFFFFFF},"
             f"u={u},v={v},a={angle},ok=1,fp=1,fd=1,fw=1,fo=0,fb_us=1,mb_us=1,log_us=1,log_id=1\r\n").encode()
 
 
 raw = b"".join(line(i, 2000 + i % 2, 2100 + 2 * (i % 2), i % 2 * 16383) for i in range(32))
 result = summarize(raw)
+slow_raw = b"".join(line(i, interval_us=1000000) for i in range(32))
+assert summarize(slow_raw)["records"] == 32  # 每秒一条，跨设备时间回绕仍可分析。
 assert result["records"] == 32 and result["angle_span_count"] == 1
 assert result["channels"]["u"]["mean_count"] == 2000.5
 assert result["channels"]["v"]["mean_count"] == 2101
