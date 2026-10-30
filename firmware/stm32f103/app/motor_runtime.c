@@ -21,6 +21,8 @@ static bool motor_runtime_arm(unsigned profile_id);
 static bool motor_runtime_pulse(void);
 #endif
 static motor_action_t last_action;
+static uint32_t zero_began_us, zero_ended_us;
+static bool zero_explicit;
 static bool button_spent, button_raw, button_seen, still_seen, fault_seen;
 static unsigned button_phase; /**< 0等稳定释放，1READY，2PRESSED；spent独立锁住本启动机会。 */
 static uint32_t button_last_us, button_changed_us, still_since_us;
@@ -161,6 +163,8 @@ void motor_runtime_init(void)
     runtime_status.state = MOTOR_RUNTIME_BOOT;
     runtime_status.pwm_is_permanently_blocked = motor_runtime_output_profile_count()==0u;
     last_action=(motor_action_t){0}; button_spent=false; button_phase=0u; button_seen=false;
+    zero_began_us=0u; zero_ended_us=0u;
+    zero_explicit=false;
     still_seen=false; fault_seen=false; position_count=0; still_min=0; still_max=0;
     output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
     board_cancel_deadline();
@@ -238,15 +242,19 @@ void motor_runtime_communication_error(void)
 }
 
 /** 已持锁，使用现在的时间；曾经有效不能替代当前新鲜输入。 */
-static bool output_inputs_are_valid(void)
+static bool input_data_are_valid(void)
 {
     uint32_t now=board_get_time_us();
     return runtime_status.fault_flags==0u && runtime_status.sample.is_valid
         && runtime_status.feedback.is_valid && runtime_status.feedback.direct_is_valid
         && runtime_status.feedback.window_is_valid
         && now-runtime_status.sample.current_completed_us<=BOARD_SAMPLE_GAP_LIMIT_US
-        && now-runtime_status.feedback_completed_us<=BOARD_FEEDBACK_GAP_LIMIT_US
-        && board_output_is_ready();
+        && now-runtime_status.feedback_completed_us<=BOARD_FEEDBACK_GAP_LIMIT_US;
+}
+
+static bool output_inputs_are_valid(void)
+{
+    return input_data_are_valid() && board_output_is_ready();
 }
 
 #ifndef MOTOR_GATE_TEST_PROFILES
@@ -369,6 +377,7 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
             if (position_count<still_min) { still_min=position_count; }
             if (position_count>still_max) { still_max=position_count; }
             if (still_max-still_min>=16) {
+                if (zero_explicit) { motor_runtime_stop_offset(false); }
                 still_since_us=sample->current_completed_us;
                 if (runtime_status.state!=MOTOR_RUNTIME_STARTING && runtime_status.state!=MOTOR_RUNTIME_ACTIVE) {
                     position_count=0;
@@ -388,12 +397,16 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         runtime_status.has_valid_sample = true;
         if (!offset_is_continuous) { motor_runtime_stop_offset(true); }
         if (runtime_status.state == MOTOR_RUNTIME_DISABLED && !runtime_status.offset_is_aborted
-            && runtime_status.estimated_offset.accepted_count < SENSOR_OFFSET_SAMPLE_COUNT
-            && !sensor_offset_add(&runtime_status.estimated_offset, sample->raw_current_u_count,
-                sample->raw_current_v_count, true)) {
-            motor_runtime_stop_offset(true);
-            runtime_status.state = MOTOR_RUNTIME_FAULT;
-            runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
+            && runtime_status.estimated_offset.accepted_count < SENSOR_OFFSET_SAMPLE_COUNT) {
+            if (!sensor_offset_add(&runtime_status.estimated_offset, sample->raw_current_u_count,
+                    sample->raw_current_v_count, true)) {
+                motor_runtime_stop_offset(true);
+                runtime_status.state = MOTOR_RUNTIME_FAULT;
+                runtime_status.fault_flags |= MOTOR_FAULT_SAMPLE;
+            } else {
+                if (runtime_status.estimated_offset.accepted_count==1u) { zero_began_us=sample->current_completed_us; }
+                zero_ended_us=sample->current_completed_us;
+            }
         }
     } else {
         motor_runtime_stop_offset(true);
@@ -572,4 +585,35 @@ bool motor_runtime_output_is_busy(void)
     uint32_t mask=board_enter_critical();
     bool busy=output_is_protected();
     board_leave_critical(mask); return busy;
+}
+
+bool motor_runtime_restart_zero(void)
+{
+    uint32_t mask=board_enter_critical();
+    bool allowed=runtime_status.state==MOTOR_RUNTIME_DISABLED && last_action.id==0u
+        && still_seen && board_get_time_us()-still_since_us>=250000u && input_data_are_valid();
+    if (allowed) {
+        (void)sensor_offset_init(&runtime_status.estimated_offset);
+        runtime_status.offset_is_aborted=false; runtime_status.offset_rejected_count=0u;
+        runtime_status.calibration_verified=false; zero_began_us=0u; zero_ended_us=0u;
+        zero_explicit=true;
+    }
+    board_leave_critical(mask); return allowed;
+}
+
+bool motor_runtime_read_zero(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero)
+{
+    if (status==NULL || zero==NULL) { return false; }
+    uint32_t mask=board_enter_critical();
+    bool valid=motor_runtime_read_log(status);
+    zero->offset=runtime_status.estimated_offset;
+    zero->began_us=zero_began_us; zero->ended_us=zero_ended_us;
+    zero->profile_id=BOARD_SAMPLING_PROFILE_ID;
+    zero->scale_nA=(uint32_t)(BOARD_NOMINAL_A_PER_COUNT*1000000000.0f+0.5f);
+    zero->flags=(uint8_t)(8u | (zero_explicit ? 16u : 0u)
+        | (zero->offset.accepted_count==SENSOR_OFFSET_SAMPLE_COUNT ? 1u : 0u)
+        | (runtime_status.offset_is_aborted ? 2u : 0u)
+        | (runtime_status.state==MOTOR_RUNTIME_DISABLED && runtime_status.fault_flags==0u && still_seen
+           && board_get_time_us()-still_since_us>=250000u && input_data_are_valid() ? 4u : 0u));
+    board_leave_critical(mask); return valid;
 }

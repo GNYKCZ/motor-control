@@ -1,7 +1,9 @@
 # STM32F103 电机固件
 
 当前版本增加[首次按键受限动作](../../docs/first_local_output_test20.md)：只有PA12新完整手势可触发每启动一次固定实验，
-P1C1 ARM/PULSE仍拒绝，STATUS/STOP回执为P1R2；Reset无默认激励。硬件操作未执行，实验须用户明确安排。
+P1C1 ARM/PULSE仍拒绝，STATUS/STOP回执为P1R2；Reset无默认激励。用户已接受首次受控输出的阶段结果。
+本分支推进[电流与换相标定](../../docs/current_angle_calibration.md)，采样改为TIM2同步后250us，
+SSI改为200us，code05/06读出及重开零偏候选；本版没有90°扫描入口，新增配置尚未板测。
 下文的“永久禁止/GPIO低”描述历史M1只采样基线，不适用于本次有条件门控路径；最新限制与步骤以上述文档为准。
 
 ## 历史 M1 只采样基线

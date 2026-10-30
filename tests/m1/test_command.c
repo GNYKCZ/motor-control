@@ -12,7 +12,7 @@
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#x); exit(1); } } while (0)
 test_usart_t test_usart;
 static uint32_t mask, clock_us, disables, sample_n;
-static bool fake_pwm, live_samples, fault_on_unlock;
+static bool fake_pwm, live_samples, fault_on_unlock, hold_angle;
 static char wire[512];
 static size_t wire_length;
 uint32_t board_enter_critical(void) { uint32_t old=mask; mask=1u; return old; }
@@ -26,7 +26,8 @@ uint32_t board_get_time_us(void) { return clock_us; }
 
 static void sample(void)
 {
-    uint32_t data=((++sample_n & 16383u)<<4), dividend=data<<6;
+    ++sample_n;
+    uint32_t data=((hold_angle ? 1000u : sample_n & 16383u)<<4), dividend=data<<6;
     for (int i=23;i>=6;--i) { if (dividend & (1u<<i)) { dividend^=0x43u<<(i-6); } }
     uint32_t packet=(data<<6)|dividend;
     uint8_t bytes[3]={(uint8_t)(packet>>16),(uint8_t)(packet>>8),(uint8_t)packet};
@@ -38,7 +39,7 @@ static void sample(void)
 static void start(void)
 {
     CHECK(!board_serial_is_busy());
-    memset(&test_usart,0,sizeof(test_usart)); clock_us=0u; sample_n=0u; live_samples=false;
+    memset(&test_usart,0,sizeof(test_usart)); clock_us=0u; sample_n=0u; live_samples=false;hold_angle=false;
     motor_runtime_init(); command_init(); motor_runtime_finish_boot(true); board_start_serial_receive();
     CHECK((test_usart.CR1 & (USART_CR1_RXNEIE|USART_CR1_PEIE))==(USART_CR1_RXNEIE|USART_CR1_PEIE));
     CHECK(test_usart.CR3 & USART_CR3_EIE);
@@ -78,7 +79,7 @@ static void tx_drain(void)
 
 static void reply_done(void)
 {
-    for (unsigned i=0u;i<100u;++i) {
+    for (unsigned i=0u;i<150u;++i) {
         clock_us+=100u; if (live_samples) { sample(); }
         (void)command_poll(clock_us);
         if (board_serial_is_busy()) { tx_drain(); }
@@ -204,5 +205,21 @@ int main(void)
     wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R2,",5u)==0); fputs(wire,stdout);
     CHECK(motor_runtime_read_log(&snap) && snap.state==MOTOR_RUNTIME_DISABLED && snap.feedback_overruns==0u);
     puts("PASS actual runtime/command/UART ISR/TXE/TC integration: STOP priority, CRC/sequence/boundaries/errors/wrap/backpressure/faults; no hardware");
+    /* 新增只读零偏回执独立黄金：只有首帧2027/2028，查询不复位统计、不产生输出。 */
+    start(); before=disables; feed(vector(1u,5u)); reply_done();
+    CHECK(wire_length==138u && result()==0u && disables==before);
+    CHECK(strncmp(wire,"P1Z1,",5u)==0);fputs(wire,stdout);
+    start(); before=disables; feed(vector(1u,6u)); reply_done();
+    CHECK(result()==4u && disables==before); /* 未静止/未暖机拒绝，不触发输出。 */
+    start();hold_angle=true;
+    for (unsigned i=0u;i<300u;++i) { clock_us+=1000u;sample(); }
+    live_samples=true;feed(vector(1u,6u));
+    motor_zero_snapshot_t zero;CHECK(motor_runtime_read_zero(&snap,&zero));
+    CHECK(zero.offset.accepted_count==0u && !fake_pwm && (zero.flags & 16u));
+    reply_done();CHECK(result()==0u);
+    CHECK(motor_runtime_read_zero(&snap,&zero) && zero.offset.accepted_count>0u);
+    uint32_t began=zero.began_us;wire_length=0u;feed(vector(1u,6u));reply_done();
+    CHECK(result()==3u && motor_runtime_read_zero(&snap,&zero) && zero.began_us==began);
+    CHECK(!fake_pwm); /* 重放ZERO_RESTART不能重开候选，更不能激励。 */
     return 0;
 }
