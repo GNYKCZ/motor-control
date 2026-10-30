@@ -199,7 +199,7 @@ int main(void)
 
     /* 已启动周期日志的完整行和ACK串行交错，真UART TC后才释放各自缓冲。 */
     start(); live_samples=true;
-    for (unsigned i=0u;i<17u;++i) { clock_us+=100u; sample(); telemetry_poll_status(100u); }
+    for (unsigned i=0u;i<17u;++i) { clock_us+=100u; sample(); telemetry_poll_status(1000u); }
     CHECK(board_serial_is_busy()); feed(vector(1u,1u));
     (void)command_poll(clock_us); tx_drain(); CHECK(strncmp(wire,"M3B3,",5u)==0); fputs(wire,stdout);
     wire_length=0u; reply_done(); CHECK(strncmp(wire,"P1R2,",5u)==0); fputs(wire,stdout);

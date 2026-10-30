@@ -38,7 +38,8 @@ def summarize(raw):
         low, high = min(low, position), max(high, position)
         dt = (current["t"] - previous["t"]) & 0xFFFFFFFF
         dn = (current["n"] - previous["n"]) & 0xFFFFFFFF
-        if not 0 < dt <= 300000 or not 0 < dn < 0x80000000:
+        # 当前M3B3每秒一条，允许至多3秒的日志间隔；不是原始采样新鲜度门限。
+        if not 0 < dt <= 3000000 or not 0 < dn < 0x80000000:
             raise ValueError("日志时间/序号间断、重复或倒序")
     if high - low >= 16:
         raise ValueError("角度变化达到16count，不符合本次静止候选条件")
