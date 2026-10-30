@@ -15,7 +15,9 @@ void board_disable_output(void)
     uint32_t mask=board_enter_critical();
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_TIM1_CLK_ENABLE();
+    bool had_request=pending_phase!=0u || (TIM1->BDTR & TIM_BDTR_MOE)!=0u;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
+    if (had_request && deadline_clock_ready) { motor_runtime_record_gate(false,board_get_time_us()); }
     pending_phase=0u;
     TIM1->DIER &= ~(TIM_DIER_UIE | TIM_DIER_CC4IE);
     /* CCxE仍保持idle低，先接管GPIO再关通道，避免AF无驱动窗口。 */
@@ -62,7 +64,9 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
     board_prepare_output_idle();
     TIM1->CCR1=ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
     largest_tick=(uint16_t)maximum; window_margin=ticks.margin_ticks;
-    TIM1->CCR4=(maximum+TIM1->ARR)/2u;
+    /* 在同一允许窗口的首个tick发比较事件，为IRQ进入/资格复核留出余量。
+     * 不改变窗口边界；迟到仍拒绝，本次请求不等下一圈重试。 */
+    TIM1->CCR4=maximum+ticks.margin_ticks+1u;
     pending_generation=generation;
     /* 写入间自然UEV可出现：MOE0。清旧UIF后只认下一次UEV，确保全部预装值已转移。 */
     TIM1->SR=~TIM_SR_UIF;
@@ -102,14 +106,33 @@ void TIM1_CC_IRQHandler(void)
         TIM1->DIER &= ~TIM_DIER_CC4IE;
         if (pending_phase==2u) {
             pending_phase=0u;
-            if (board_output_is_ready() && in_start_window()
-                && motor_runtime_commit_output(pending_generation)) {
+            motor_fault_t reject=MOTOR_FAULT_DEVICE;
+            /* 逗号表达式只标记当前检查阶段，保持原有短路顺序；不增加寄存器读取。 */
+            if (board_output_is_ready()
+                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW),in_start_window())
+                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_INPUT),motor_runtime_commit_output(pending_generation))
+                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW),in_start_window())
+                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME),!motor_runtime_output_deadline_reached(board_get_time_us()))) {
                 TIM1->BDTR |= TIM_BDTR_MOE;
+                uint32_t opened_us=board_get_time_us();
+                motor_runtime_record_gate(true,opened_us);
                 /* 短Break可能发生在最终检查与MOE写之间，低窗内再次检查，禁止陈旧事务重开。 */
-                if (!board_output_is_ready() || !in_start_window()) {
-                    motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+                bool invalid_driver=!board_output_is_ready();
+                bool invalid_window=invalid_driver || !in_start_window();
+                uint32_t checked_us=board_get_time_us();
+                bool expired=motor_runtime_output_deadline_reached(checked_us);
+                if (expired || invalid_window) {
+                    /* 先清MOE，避免状态清理/时标记录挤占共同低窗。 */
+                    TIM1->BDTR &= ~TIM_BDTR_MOE;
+                    motor_runtime_record_gate(false,board_get_time_us());
                 }
-            } else { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); }
+                if (expired) {
+                    motor_runtime_check_deadline(checked_us);
+                } else if (invalid_window) {
+                    motor_runtime_latch_fault(invalid_driver ? MOTOR_FAULT_DEVICE
+                        : (motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW));
+                }
+            } else { motor_runtime_latch_fault(reject); }
         }
     }
     board_leave_critical(mask);

@@ -1,6 +1,9 @@
 /** 只替换runtime快照与板级发送，真实M3B3整数序列化独立验收。
  * 期望字符串来自协议十进制边界，不调用被测代码生成expected。 */
 #include "motor_runtime.h"
+/* 本单元只测codec，实际输出期间日志暂停由runtime集成用例验证。 */
+static bool gate_busy;
+bool motor_runtime_output_is_busy(void) { return gate_busy; }
 #include "telemetry.h"
 #include "board_config.h"
 #include <stdio.h>
@@ -95,6 +98,9 @@ int main(void)
     busy = false; allow_snapshot = false; before = submissions;
     emit(1500u); CHECK(!busy && submissions == before);
     allow_snapshot = true; emit(1600u); CHECK(busy);
+    busy=false; before=submissions; gate_busy=true;
+    emit(1700u); CHECK(submissions==before && !busy); /* ACTIVE时不把新状态塞入旧M3B3。 */
+    gate_busy=false; emit(1800u); CHECK(submissions==before+1u && busy);
     puts("PASS compact integer codec: 0/decimal edges/UINT32_MAX, exact 169B, maximum-step ID, busy/failures");
     return 0;
 #endif

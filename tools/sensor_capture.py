@@ -46,6 +46,32 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
+    if raw.startswith(b"P1R2,"):
+        widths = [8, 2, 2, 2, 8, 8, 8, 8, 8, 8, 8, 2, 4]
+        pattern = b"P1R2," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
+        match = re.fullmatch(pattern, raw)
+        if not match or len(raw) != 95:
+            raise ValueError("P1R2 layout mismatch")
+        values = [int(value, 16) for value in match.groups()]
+        if binascii.crc_hqx(raw[:89], 0xFFFF) != values[-1]:
+            raise ValueError("P1R2 CRC mismatch")
+        fields = dict(zip("q c r s f n t id req start end why crc".split(), values))
+        if fields["s"] > 5 or fields["r"] & 0x7F > 7 or fields["why"] & 0x3F > 6:
+            raise ValueError("P1R2 state/result/reason out of range")
+        reason = fields["why"] & 0x3F
+        if fields["id"] == 0 and any(fields[k] for k in ("req", "start", "end", "why")):
+            raise ValueError("P1R2 missing action contradicts times")
+        if fields["id"] and reason == 0:
+            raise ValueError("P1R2 action without phase")
+        if not fields["why"] & 0x80 and fields["start"] != 0:
+            raise ValueError("P1R2 start validity contradicts time")
+        if not fields["why"] & 0x40 and fields["end"] != 0:
+            raise ValueError("P1R2 end validity contradicts time")
+        flags = fields["why"] & 0xC0
+        if ((reason == 1 and flags != 0x40) or (reason == 2 and flags != 0)
+                or (reason == 3 and flags != 0x80) or (reason in {4, 5, 6} and not flags & 0x40)):
+            raise ValueError("P1R2 action phase contradicts timestamp flags")
+        return {"format": "P1R2", **fields}
     if raw.startswith(b"P1R1,"):
         # 固定56字节、CRC覆盖0..49含最后逗号；独立使用Python库，不照搬C的CRC循环。
         pattern = rb"P1R1,([0-9A-F]{8}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{4})\r\n"
