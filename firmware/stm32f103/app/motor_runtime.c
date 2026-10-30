@@ -5,7 +5,7 @@
 #include "board_io.h"
 #include <stddef.h>
 
-#if defined(MOTOR_GATE_TEST_PROFILES) && (defined(__ARM_ARCH) || defined(__arm__))
+#if (defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE)) && (defined(__ARM_ARCH) || defined(__arm__))
 #error "Synthetic output profiles are forbidden in target firmware"
 #endif
 
@@ -16,7 +16,11 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 #endif
 #ifndef MOTOR_GATE_TEST_PROFILES
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
+#if BOARD_SCAN_ENABLED
+static const pwm_profile_t local_profile = {{60u,0u,0u,434u},5000u,1420000u};
+#else
 static const pwm_profile_t local_profile = {{0u,60u,0u,434u},5000u,20000u};
+#endif
 static bool motor_runtime_arm(unsigned profile_id);
 static bool motor_runtime_pulse(void);
 #endif
@@ -24,6 +28,10 @@ static motor_action_t last_action;
 static uint32_t zero_began_us, zero_ended_us;
 static bool zero_explicit;
 static motor_current_snapshot_t current_capture;
+static motor_scan_snapshot_t scan_capture;
+static uint32_t scan_applied_us, scan_submit_deadline_us;
+static unsigned scan_requested_step;
+static bool scan_pending;
 static bool button_spent, button_raw, button_seen, still_seen, fault_seen;
 static unsigned button_phase; /**< 0等稳定释放，1READY，2PRESSED；spent独立锁住本启动机会。 */
 static uint32_t button_last_us, button_changed_us, still_since_us;
@@ -74,7 +82,12 @@ static void expire_output(uint32_t now)
         motor_runtime_latch_fault(MOTOR_FAULT_SAMPLE);
     } else if (now-runtime_status.feedback_completed_us>BOARD_FEEDBACK_GAP_LIMIT_US) {
         motor_runtime_latch_fault(MOTOR_FAULT_FEEDBACK);
+    } else if (BOARD_SCAN_ENABLED && scan_pending && (int32_t)(now-scan_submit_deadline_us)>=0) {
+        scan_capture.reason=6u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
     } else if ((int32_t)(now-(runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us))>=0) {
+        if (BOARD_SCAN_ENABLED) {
+            scan_capture.reason=9u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
+        }
         if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
             last_action.reason=MOTOR_ACTION_DURATION;
         }
@@ -92,6 +105,9 @@ static void schedule_output_deadline(void)
     if ((int32_t)(feedback_deadline-deadline)<0) { deadline=feedback_deadline; }
     uint32_t output_deadline=runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us;
     if ((int32_t)(output_deadline-deadline)<0) { deadline=output_deadline; }
+    if (BOARD_SCAN_ENABLED && scan_pending && (int32_t)(scan_submit_deadline_us-deadline)<0) {
+        deadline=scan_submit_deadline_us;
+    }
     if ((int32_t)(deadline-now)<=0 || !board_schedule_deadline(deadline)) {
         expire_output(board_get_time_us());
         if (output_is_protected()) { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); }
@@ -167,6 +183,8 @@ void motor_runtime_init(void)
     zero_began_us=0u; zero_ended_us=0u;
     zero_explicit=false;
     current_capture=(motor_current_snapshot_t){0};
+    scan_capture=(motor_scan_snapshot_t){0}; scan_capture.direction=BOARD_SCAN_DIRECTION;
+    scan_pending=false; scan_applied_us=0u; scan_submit_deadline_us=0u; scan_requested_step=0u;
     still_seen=false; fault_seen=false; position_count=0; still_min=0; still_max=0;
     output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
     board_cancel_deadline();
@@ -205,6 +223,11 @@ void motor_runtime_finish_boot(bool devices_are_ready)
 void motor_runtime_stop(void)
 {
     uint32_t mask=board_enter_critical();
+    if (BOARD_SCAN_ENABLED && scan_capture.action_id!=0u) {
+        if (!scan_capture.reason) { scan_capture.reason=2u; }
+        if (output_is_protected()) { scan_capture.ended_us=board_get_time_us(); }
+        scan_pending=false;
+    }
     if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
         last_action.reason=MOTOR_ACTION_STOP;
     }
@@ -222,6 +245,9 @@ void motor_runtime_stop(void)
 void motor_runtime_latch_fault(motor_fault_t fault)
 {
     uint32_t mask=board_enter_critical();
+    if (BOARD_SCAN_ENABLED && scan_capture.action_id!=0u && !scan_capture.reason) {
+        scan_capture.reason=fault==MOTOR_FAULT_EXPERIMENT ? 4u : 3u;
+    }
     if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
         last_action.reason=MOTOR_ACTION_FAULT;
     }
@@ -324,6 +350,70 @@ bool motor_runtime_output_deadline_reached(uint32_t now_us)
         && (int32_t)(now_us-pulse_deadline_us)>=0;
 }
 
+#if BOARD_SCAN_ENABLED
+static void scan_step_sample(const motor_sample_t *sample)
+{
+    if (runtime_status.state!=MOTOR_RUNTIME_ACTIVE) { return; }
+    if ((int32_t)(board_get_time_us()-pulse_deadline_us)>=0) {
+        scan_capture.reason=9u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
+    }
+    int32_t du=(int32_t)sample->raw_current_u_count*512-(int32_t)runtime_status.estimated_offset.sum_u_count;
+    int32_t dv=(int32_t)sample->raw_current_v_count*512-(int32_t)runtime_status.estimated_offset.sum_v_count;
+    if (sample->raw_current_u_count==0u || sample->raw_current_u_count==4095u
+        || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u
+        || du>131072 || du< -131072 || dv>131072 || dv< -131072
+        || du+dv>131072 || du+dv< -131072) {
+        scan_capture.reason=5u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
+    }
+    if (scan_pending) { expire_output(board_get_time_us()); return; }
+    uint32_t elapsed=sample->current_completed_us-scan_applied_us;
+    if (elapsed>=0x80000000u) { return; }
+    motor_scan_point_t *point=&scan_capture.point[scan_capture.step];
+    /* 稳定窗口属于角度采集，不属于ADC发布：整帧SSI必须落在[150ms,200ms)。
+     * 先收窗口内最后一帧，再结束点；允许其ADC完成稍晚于200ms，不夹带窗口前角度。 */
+    uint32_t angle_began=sample->encoder.read_started_us-scan_applied_us;
+    uint32_t angle_ended=sample->encoder.read_completed_us-scan_applied_us;
+    if (angle_began>=150000u && angle_began<200000u && angle_ended<200000u) {
+        if (point->count>=64u) { scan_capture.reason=8u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return; }
+        int16_t position=(int16_t)(position_count-action_origin);
+        if (!point->count) { point->minimum=position; point->maximum=position; }
+        if (position<point->minimum) { point->minimum=position; }
+        if (position>point->maximum) { point->maximum=position; }
+        point->sum+=position; point->count++;
+    }
+    if (elapsed>=200000u) {
+        if (point->count<40u || point->maximum-point->minimum>=16) {
+            scan_capture.reason=7u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
+        }
+        scan_capture.mask |= (uint8_t)(1u<<scan_capture.step);
+        if (scan_capture.step==6u) {
+            scan_capture.done=1u; scan_capture.reason=1u;
+            last_action.reason=MOTOR_ACTION_DURATION; motor_runtime_stop(); return;
+        }
+        static const uint16_t vectors[6][3]={{60u,0u,0u},{60u,60u,0u},{0u,60u,0u},
+                                           {0u,60u,60u},{0u,0u,60u},{60u,0u,60u}};
+        scan_requested_step=(unsigned)scan_capture.step+1u;
+        unsigned phase=BOARD_SCAN_DIRECTION==1 ? scan_requested_step%6u : (6u-scan_requested_step)%6u;
+        board_pwm_ticks_t ticks={vectors[phase][0],vectors[phase][1],vectors[phase][2],434u};
+        scan_pending=true; scan_submit_deadline_us=board_get_time_us()+2000u;
+        if (!board_update_scan_point(ticks,output_generation,scan_requested_step)) {
+            scan_capture.reason=6u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
+        }
+        return;
+    }
+}
+#endif
+
+bool motor_runtime_commit_scan_point(uint32_t generation, unsigned step, uint32_t now_us)
+{
+    if (!BOARD_SCAN_ENABLED || !scan_pending || step!=scan_requested_step || step>6u
+        || generation!=output_generation || runtime_status.state!=MOTOR_RUNTIME_ACTIVE
+        || (int32_t)(now_us-scan_submit_deadline_us)>=0 || (int32_t)(now_us-pulse_deadline_us)>=0
+        || !output_inputs_are_valid()) { return false; }
+    scan_pending=false; scan_capture.step=(uint8_t)step; scan_applied_us=now_us;
+    schedule_output_deadline(); return runtime_status.state==MOTOR_RUNTIME_ACTIVE;
+}
+
 void motor_runtime_handle_sample(const motor_sample_t *sample)
 {
     uint32_t previous_mask = board_enter_critical();
@@ -369,7 +459,7 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
      * 保守排除开门前采集、开门后才完成/发布的跨边界帧，不能只看ADC完成时间。
      * 先保留触发位移保护的最后一个有效样本；尚未开门/截止后的数据不得冒充带流。
      * 最多32帧，仅整数和/极值，无IRQ格式化；超容量冻结并标记，不覆盖早期证据。 */
-    if (is_valid && runtime_status.state==MOTOR_RUNTIME_ACTIVE && (last_action.timing_flags & 0x80u)
+    if (!BOARD_SCAN_ENABLED && is_valid && runtime_status.state==MOTOR_RUNTIME_ACTIVE && (last_action.timing_flags & 0x80u)
         && sample->encoder.read_started_us-last_action.started_us>0u
         && sample->encoder.read_started_us-last_action.started_us<0x80000000u
         && sample->current_completed_us-last_action.started_us<0x80000000u
@@ -409,7 +499,8 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
                 still_min=position_count; still_max=position_count;
             }
             if ((runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
-                && (position_count-action_origin>=46 || position_count-action_origin<=-46)) {
+                && (position_count-action_origin>=(BOARD_SCAN_ENABLED ? 4000 : 46)
+                    || position_count-action_origin<=-(BOARD_SCAN_ENABLED ? 4000 : 46))) {
                 motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
             }
         }
@@ -417,6 +508,9 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
     runtime_status.sample = *sample;
     runtime_status.sample.is_valid = is_valid;
     runtime_status.sample_count++;
+#if BOARD_SCAN_ENABLED
+    if (is_valid && offset_is_continuous) { scan_step_sample(sample); }
+#endif
     if (is_valid) {
         runtime_status.has_valid_sample = true;
         if (!offset_is_continuous) { motor_runtime_stop_offset(true); }
@@ -562,7 +656,11 @@ void motor_runtime_record_gate(bool opened, uint32_t now_us)
     if (opened) {
         last_action.started_us=now_us; last_action.timing_flags |= 0x80u;
         last_action.reason=MOTOR_ACTION_ACTIVE;
-    } else { last_action.ended_us=now_us; last_action.timing_flags |= 0x40u; }
+        if (BOARD_SCAN_ENABLED) { scan_capture.started_us=now_us; scan_applied_us=now_us; }
+    } else {
+        last_action.ended_us=now_us; last_action.timing_flags |= 0x40u;
+        if (BOARD_SCAN_ENABLED) { scan_capture.ended_us=now_us; }
+    }
 }
 
 bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action)
@@ -595,10 +693,25 @@ void motor_runtime_poll_button(bool pressed, uint32_t now_us)
             last_action=(motor_action_t){1u,board_get_time_us(),0u,0u,MOTOR_ACTION_REJECTED,0u};
             action_origin=position_count;
             bool still=still_seen && board_get_time_us()-still_since_us>=250000u;
+            if (BOARD_SCAN_ENABLED) {
+                scan_capture.action_id=last_action.id; scan_capture.origin=runtime_status.sample.encoder.raw_angle_count;
+                still=still && zero_explicit && !runtime_status.offset_is_aborted
+                    && runtime_status.estimated_offset.accepted_count==512u
+                    && runtime_status.estimated_offset.minimum_u_count>64u
+                    && runtime_status.estimated_offset.maximum_u_count<4031u
+                    && runtime_status.estimated_offset.minimum_v_count>64u
+                    && runtime_status.estimated_offset.maximum_v_count<4031u
+                    && runtime_status.estimated_offset.maximum_u_count-runtime_status.estimated_offset.minimum_u_count<=32
+                    && runtime_status.estimated_offset.maximum_v_count-runtime_status.estimated_offset.minimum_v_count<=32;
+                if (!still) { scan_capture.reason=10u; }
+            }
             if (still && motor_runtime_arm(1u)) {
                 last_action.reason=MOTOR_ACTION_WAIT_START;
                 if (!motor_runtime_pulse()) { last_action.reason=MOTOR_ACTION_REJECTED; last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u; }
-            } else { last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u; }
+            } else {
+                if (BOARD_SCAN_ENABLED && !scan_capture.reason) { scan_capture.reason=10u; }
+                last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u;
+            }
         }
     }
     board_leave_critical(mask);
@@ -649,5 +762,13 @@ bool motor_runtime_read_current(motor_log_snapshot_t *status, motor_zero_snapsho
     uint32_t mask=board_enter_critical();
     bool valid=motor_runtime_read_zero(status,zero);
     *current=current_capture;
+    board_leave_critical(mask); return valid;
+}
+
+bool motor_runtime_read_scan(motor_log_snapshot_t *status, motor_scan_snapshot_t *scan)
+{
+    if (status==NULL || scan==NULL) { return false; }
+    uint32_t mask=board_enter_critical();
+    bool valid=motor_runtime_read_log(status); *scan=scan_capture;
     board_leave_critical(mask); return valid;
 }

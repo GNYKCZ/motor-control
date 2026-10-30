@@ -2,6 +2,7 @@
  * 合成profile和寄存器模型仅用于主机；不证明桥电气行为、延迟或电流安全。 */
 #include "linkage.h"
 #include "main.h"
+#include "board_config.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,8 +63,10 @@ void pwm_model_written(unsigned id, uint32_t value)
         ++enables;
         #ifdef MOTOR_GATE_TEST_PROFILES
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
-#else
+#elif defined(MOTOR_LOCAL_PULSE_BASELINE)
         if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#else
+        if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #endif
             || pwm_tim1.CNT.value<=300u || (pwm_tim1.CR1.value & TIM_CR1_DIR)) { ++early_enables; }
         if (delay_after_moe) { pwm_tim1.CNT.value=1700u; }
@@ -81,8 +84,15 @@ void board_leave_critical(uint32_t old)
     if (!mask && queued_stop) { queued_stop=false; motor_runtime_stop(); }
 }
 uint32_t board_get_time_us(void) { if (advancing_ticks) { advance_timer(36u); } uint32_t old=now_us;now_us+=clock_step;return old; }
+#if BOARD_SCAN_ENABLED
+static char scan_wire[257];
+bool board_serial_is_busy(void) { return false; }
+bool board_start_serial_write(const char *bytes,uint32_t length)
+{ CHECK(length<=256u);std::memcpy(scan_wire,bytes,length);scan_wire[length]='\0';return true; }
+#else
 bool board_serial_is_busy(void) { return true; }
 bool board_start_serial_write(const char *,uint32_t) { return false; }
+#endif
 
 static motor_status_t status()
 {
@@ -151,7 +161,7 @@ int main()
 {
     (void)timer_tick; (void)button_steps; (void)still_ready;
     reset();
-#ifndef MOTOR_GATE_TEST_PROFILES
+#if defined(MOTOR_LOCAL_PULSE_BASELINE)
     // 完整低频零偏批：显式重开不使能，512个1ms样本，时间窗/整数和独立核对。
     still_ready();CHECK(motor_runtime_restart_zero());unsigned zero_enables=enables;
     motor_log_snapshot_t zero_log; motor_zero_snapshot_t zero;
@@ -296,6 +306,125 @@ int main()
     button_steps(true,21u);button_steps(false,21u);open_window();check_closed();
     CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
     std::puts("PASS production: local released gesture only, one attempt/boot, twenty-ms deadline and valid action timestamps");
+#elif BOARD_SCAN_ENABLED
+    fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);
+    open_window();check_closed();CHECK(enables==0u); /* 未显式零偏不得启动长扫描。 */
+    reset(0xfff00000u);fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);open_window();
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+    const unsigned oracle[7][3]={{60,0,0},{60,60,0},{0,60,0},{0,60,60},{0,0,60},{60,0,60},{60,0,0}};
+    motor_log_snapshot_t log;motor_scan_snapshot_t scan;
+    for (unsigned point=0u;point<7u;++point) {
+        unsigned index=BOARD_SCAN_DIRECTION==1 ? point : (6u-point)%6u;
+        for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[index][c]); }
+        fixed_count=(uint16_t)((BOARD_SCAN_DIRECTION*(int)point*390)&16383);
+        for (unsigned ms=0u;ms<200u;++ms) {
+            now_us+=1000u;pwm_tim1.CNT.value=1000u;sample();
+        }
+        CHECK(motor_runtime_read_scan(&log,&scan));
+        CHECK(scan.point[point].count==50u && scan.point[point].sum==BOARD_SCAN_DIRECTION*(int)point*390*50);
+        CHECK(scan.point[point].minimum==scan.point[point].maximum);
+        if (point<6u) {
+            CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+            CHECK(scan.step==point); /* 写预装不是已生效，必须等自然UEV确认。 */
+            now_us+=1999u;natural_update();TIM1_UP_IRQHandler(); /* 提交期限前1us仍可接受，总期限不后移。 */
+            CHECK(motor_runtime_read_scan(&log,&scan) && scan.step==point+1u);
+        }
+    }
+    check_closed();CHECK(scan.done==1u && scan.reason==1u && scan.mask==127u && enables==1u);
+    CHECK(scan.ended_us-scan.started_us<1420000u);
+    const char request[]="P1C1,00000001,08,1B7E\r\n";
+    for (unsigned i=0u;i<23u;++i) { command_receive_byte((uint8_t)request[i],now_us); }
+    for (unsigned i=0u;i<250u;++i) { (void)command_poll(now_us); }
+    CHECK(std::strlen(scan_wire)==248u);std::fputs(scan_wire,stdout);
+    auto start_scan=[]() {
+        still_ready();CHECK(motor_runtime_restart_zero());button_steps(false,512u);
+        button_steps(true,21u);button_steps(false,21u);open_window();
+        CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+    };
+    // 扫描RV-001：SSI在150ms前、ADC在150ms完成，不得算入稳定窗口；同时跨32位时标回绕。
+    reset(0xfff00000u);fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);button_steps(true,21u);button_steps(false,21u);open_window();
+    for (unsigned i=0u;i<149u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=15u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==0u);
+    fixed_count=0u;
+    for (unsigned i=0u;i<49u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=14u;pwm_tim1.CNT.value=1000u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==50u && scan.point[0].sum==14);
+    CHECK(scan.point[0].maximum==14 && (scan.mask & 1u)); /* SSI结束在200ms前、ADC到200ms才发布的最后帧保留。 */
+    motor_runtime_stop();check_closed();
+    start_scan();
+    for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+    now_us+=1028u;fixed_count=15u;pwm_tim1.CNT.value=1000u;sample(); /* SSI结束恰好200000us，排除。 */
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==49u && scan.point[0].sum==0);
+    motor_runtime_stop();check_closed();
+    // 整个最后50ms只有25帧，不得用延时或其他点补齐。
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
+    for (unsigned i=0u;i<25u;++i) { now_us+=2000u;sample(); }
+    check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==7u && !scan.done);
+    // 40帧边界可提交，64帧存储边界保持有效，第65帧必须中止。
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<40u;++i) { now_us+=1250u;sample(); }
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==40u && (scan.mask & 1u));
+    motor_runtime_stop();check_closed();
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<64u;++i) { now_us+=100u;sample(); }
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==64u && !scan.reason);
+    now_us+=100u;sample();check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==8u);
+    start_scan();
+    for (unsigned i=0u;i<200u;++i) { now_us+=1000u;fixed_count=(i%2u) ? 8u : 16376u;sample(); }
+    check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==7u);
+    start_scan();now_us+=1000u;fixed_count=3999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    now_us+=1000u;fixed_count=4000u;sample();check_closed();
+    CHECK(status().fault_flags==MOTOR_FAULT_EXPERIMENT);
+    // 点请求未生效，独立TIM3提交期限必须截止，即使ADC与前台都不再推进。
+    start_scan();
+    for (unsigned i=0u;i<200u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
+    timer_tick(2000u);check_closed();CHECK(status().fault_flags & MOTOR_FAULT_CALIBRATION);
+    // CCR写入与UEV/Break/排队STOP逐访问点交错：不能提交混合矢量，也不得再次开MOE。
+    start_scan();
+    for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;trace=true;access_count=0u;pwm_tim1.CNT.value=1000u;sample();trace=false;
+    unsigned update_points=access_count;CHECK(update_points>10u);
+    for (unsigned kind=1u;kind<=3u;++kind) {
+        for (unsigned at=1u;at<=update_points;++at) {
+            start_scan();
+            for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+            now_us+=1000u;pwm_tim1.CNT.value=1000u;
+            trace=true;access_count=0u;inject_at=at;inject_kind=kind;sample();trace=false;
+            if (status().state==MOTOR_RUNTIME_ACTIVE && kind==1u) {
+                TIM1_UP_IRQHandler();
+                CHECK(motor_runtime_read_scan(&log,&scan));
+                if (scan.step==1u) {
+                    unsigned phase=BOARD_SCAN_DIRECTION==1 ? 1u : 5u;
+                    for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[phase][c]); }
+                } else {
+                    now_us+=100u;natural_update();TIM1_UP_IRQHandler();
+                    CHECK(motor_runtime_read_scan(&log,&scan) && scan.step==1u);
+                }
+                motor_runtime_stop();
+            }
+            if (kind == 2u) { TIM1_BRK_IRQHandler(); } /* 硬件已清MOE，服务待决Break IRQ后才检查引脚接管。 */
+            check_closed();CHECK(enables==1u);
+            natural_update();TIM1_UP_IRQHandler();TIM1_CC_IRQHandler();check_closed();
+        }
+    }
+    // 电流诊断越界立即撤销，参数未标校准；旧样本不能让长动作继续。
+    still_ready();CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);open_window();
+    now_us+=1000u;sample(true,2283u,2028u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE); /* 256count等号 */
+    now_us+=1000u;sample(true,2284u,2028u);check_closed(); /* 257count */
+    CHECK(status().fault_flags==MOTOR_FAULT_CALIBRATION);
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
+    start_scan();now_us+=1000u;sample(true,2227u,2228u);check_closed(); /* 单路200count，但推算W为-400count。 */
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
+    std::puts("PASS production scan: seven applied points, fixed direction, explicit zero, bounded statistics/current trip; no hardware");
 #else
     CHECK(motor_runtime_output_profile_count()==1u);
     CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());

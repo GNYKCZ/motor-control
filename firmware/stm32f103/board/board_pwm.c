@@ -3,8 +3,10 @@
 #include "board_io.h"
 #include "motor_runtime.h"
 #include "main.h"
+#include "board_config.h"
 
 static uint32_t pending_generation;
+static unsigned pending_scan_step;
 static uint16_t largest_tick, window_margin;
 static unsigned pending_phase; /**< 0无请求，1等自然UEV，2等上数共同低窗。 */
 static bool deadline_clock_ready;
@@ -76,13 +78,40 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
     return true;
 }
 
+bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsigned step)
+{
+    /* 调用者已持runtime锁。影子寄存器不同步写不是原子提交：检测写间UEV，不能洗掉标志。 */
+    uint32_t high=(ticks.u==60u)+(ticks.v==60u)+(ticks.w==60u);
+    if (step==0u || step>6u || pending_phase!=0u || generation!=pending_generation
+        || (ticks.u!=0u && ticks.u!=60u) || (ticks.v!=0u && ticks.v!=60u)
+        || (ticks.w!=0u && ticks.w!=60u) || high==0u || high==3u
+        || !board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)
+        || TIM1->CNT<=494u) { board_disable_output(); return false; }
+    uint32_t began=board_get_time_us();
+    TIM1->SR=~TIM_SR_UIF;
+    TIM1->CCR1=ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
+    if ((TIM1->SR & TIM_SR_UIF)!=0u || TIM1->CNT<=494u
+        || board_get_time_us()-began>=50u || !board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)) {
+        board_disable_output(); return false;
+    }
+    pending_scan_step=step; pending_phase=3u;
+    TIM1->DIER |= TIM_DIER_UIE;
+    return true;
+}
+
 void TIM1_UP_IRQHandler(void)
 {
     uint32_t mask=board_enter_critical();
     if ((TIM1->SR & TIM_SR_UIF)!=0u && (TIM1->DIER & TIM_DIER_UIE)!=0u) {
         TIM1->SR=~TIM_SR_UIF;
         TIM1->DIER &= ~TIM_DIER_UIE;
-        if (pending_phase==1u) {
+        if (BOARD_SCAN_ENABLED && pending_phase==3u) {
+            pending_phase=0u;
+            if (!board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)
+                || !motor_runtime_commit_scan_point(pending_generation,pending_scan_step,board_get_time_us())) {
+                motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
+            }
+        } else if (pending_phase==1u) {
             pending_phase=2u;
             TIM1->SR=~TIM_SR_CC4IF;
             TIM1->DIER |= TIM_DIER_CC4IE;
