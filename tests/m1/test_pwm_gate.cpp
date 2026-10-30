@@ -152,6 +152,22 @@ int main()
     (void)timer_tick; (void)button_steps; (void)still_ready;
     reset();
 #ifndef MOTOR_GATE_TEST_PROFILES
+    // 完整低频零偏批：显式重开不使能，512个1ms样本，时间窗/整数和独立核对。
+    still_ready();CHECK(motor_runtime_restart_zero());unsigned zero_enables=enables;
+    motor_log_snapshot_t zero_log; motor_zero_snapshot_t zero;
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && zero.offset.accepted_count==0u);
+    uint32_t zero_first=now_us+1000u;
+    button_steps(false,512u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero));
+    CHECK(zero.offset.accepted_count==512u && zero.offset.sum_u_count==2027u*512u
+        && zero.offset.sum_v_count==2028u*512u && zero.flags==0x1du);
+    CHECK(zero.began_us==zero_first && zero.ended_us-zero.began_us==511000u && enables==zero_enables);
+    CHECK(!status().calibration_verified);
+    CHECK(motor_runtime_restart_zero());button_steps(false,10u);fixed_count=16u;button_steps(false,1u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && (zero.flags & 2u) && zero.offset.accepted_count==10u);
+    fixed_count=0u;button_steps(false,600u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && (zero.flags & 2u) && zero.offset.accepted_count==10u);
+    reset();CHECK(!motor_runtime_restart_zero()); /* 没有静止暖机不能重开。 */
     // 比较事件+300tick进入延迟，每次寄存器访问4tick、取时36tick的明确压力场景。
     // 从实际CCR4起算，不把CNT固定在一个永不消失的窗口中。
     still_ready();button_steps(true,21u);button_steps(false,21u);

@@ -4,6 +4,7 @@
 #define BOARD_CONFIG_H
 
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
+#define BOARD_SAMPLING_PROFILE_ID 0x00020001u /**< 标定配置：2kHz PWM、TIM2延时ADC、1kHz原始流。 */
 /* 外设时钟/ARR/RCR/比较值只由 m1_sampling.ioc 生成，不在本头复制第二套参数。 */
 #define BOARD_ENCODER_TRANSFER_LIMIT_US 40u /**< 24 bit / 1.125 MHz 约 21.34 us，40 us 为软件上限。 */
 #define BOARD_ENCODER_AGE_LIMIT_US 200u     /**< 从读取开始到 ADC 完成的最大年龄，未实测。 */

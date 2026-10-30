@@ -106,6 +106,13 @@ typedef struct { uint32_t id, requested_us, started_us, ended_us; motor_action_r
 } motor_action_t;
 /** 同一短锁同时冻结旧状态与最近一次动作槽，供P1R2回执；不格式化、不提供可写内部指针。 */
 bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action);
+/** 完整512帧零偏候选的只读快照；不自动应用或标为已校准。 */
+typedef struct { sensor_offset_t offset; uint32_t began_us, ended_us, profile_id, scale_nA;
+    uint8_t flags; /**< bit0满批、bit1中止、bit2静止辅助、bit3名义增益、bit4显式重开批次。 */
+} motor_zero_snapshot_t;
+bool motor_runtime_read_zero(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero);
+/** 仅DISABLED/无故障/新鲜静止/尚无动作时重开候选批，不改变输出资格。 */
+bool motor_runtime_restart_zero(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */

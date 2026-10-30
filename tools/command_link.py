@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from sensor_capture import save_chunks
 
-COMMANDS = {"status": 1, "stop": 2, "arm": 3, "pulse": 4}
+COMMANDS = {"status": 1, "stop": 2, "arm": 3, "pulse": 4, "zero-status": 5, "zero-restart": 6}
 
 
 def make_command(sequence, command):
@@ -80,7 +80,7 @@ def main():
         if args.output.exists():
             (args.output / "send_result.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     records = [json.loads(line) for line in (args.output / "records.jsonl").read_text(encoding="utf-8").splitlines()]
-    replies = [r["fields"] for r in records if r["fields"] and r["fields"]["format"] in {"P1R1", "P1R2"}
+    replies = [r["fields"] for r in records if r["fields"] and r["fields"]["format"] in {"P1R1", "P1R2", "P1Z1"}
                and r["fields"]["q"] == args.seq and r["fields"]["c"] == COMMANDS[args.command]]
     if not replies:
         raise SystemExit("未收到匹配回执；保留raw.bin，不自动重发。STOP无回执不代表未执行，也不能当已停机证明。")

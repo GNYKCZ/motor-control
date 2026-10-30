@@ -46,6 +46,34 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
+    if raw.startswith(b"P1Z1,"):
+        widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8, 4]
+        pattern = b"P1Z1," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
+        match = re.fullmatch(pattern, raw)
+        if not match or len(raw) != 138:
+            raise ValueError("P1Z1 layout mismatch")
+        values = [int(value, 16) for value in match.groups()]
+        if binascii.crc_hqx(raw[:132], 0xFFFF) != values[-1]:
+            raise ValueError("P1Z1 CRC mismatch")
+        fields = dict(zip("q c r s f n t cn su sv umin umax vmin vmax fl scale beg end cfg crc".split(), values))
+        if fields["c"] != 5 or fields["s"] > 5 or fields["r"] & 0x7F > 7 or fields["cn"] > 512:
+            raise ValueError("P1Z1 command/state/count out of range")
+        count, flags = fields["cn"], fields["fl"]
+        if flags & ~31 or not flags & 8 or bool(flags & 1) != (count == 512):
+            raise ValueError("P1Z1 candidate flags mismatch")
+        if not fields["scale"] or not fields["cfg"]:
+            raise ValueError("P1Z1 missing configuration or nominal scale")
+        if not count and any(fields[k] for k in ("su", "sv", "umin", "umax", "vmin", "vmax", "beg", "end")):
+            raise ValueError("P1Z1 empty candidate contradicts data")
+        for channel in ("u", "v"):
+            low, high, total = fields[channel + "min"], fields[channel + "max"], fields["s" + channel]
+            if not 0 <= low <= high <= 4095 or not count * low <= total <= count * high:
+                raise ValueError("P1Z1 candidate sum/range mismatch")
+        if count and (fields["end"] - fields["beg"]) & 0xFFFFFFFF > (count - 1) * 3000:
+            raise ValueError("P1Z1 candidate time order/gap mismatch")
+        if count and (fields["t"] - fields["end"]) & 0xFFFFFFFF >= 0x80000000:
+            raise ValueError("P1Z1 snapshot predates candidate")
+        return {"format": "P1Z1", **fields}
     if raw.startswith(b"P1R2,"):
         widths = [8, 2, 2, 2, 8, 8, 8, 8, 8, 8, 8, 2, 4]
         pattern = b"P1R2," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"

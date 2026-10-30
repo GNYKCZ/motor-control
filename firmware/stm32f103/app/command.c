@@ -1,4 +1,4 @@
-/** 固定P1C1 23B / P1R2 95B；无printf、浮点、扫描或动态分配。
+/** 固定P1C1 23B / P1R2 95B / P1Z1 138B；无printf、浮点、扫描或动态分配。
  * RX状态仅在UART IRQ/短临界区修改；TX缓冲只由前台修改，TC前保持借用。 */
 #include "command.h"
 #include "board_io.h"
@@ -7,7 +7,7 @@
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
        REPLY_DENIED=4, REPLY_UART=5, REPLY_TIMEOUT=6, REPLY_SNAPSHOT=7 };
-enum { REQUEST_STATUS=1, REQUEST_STOP=2, REPLY_LOST=128 };
+enum { REQUEST_STATUS=1, REQUEST_STOP=2, REQUEST_ZERO_STATUS=5, REQUEST_ZERO_RESTART=6, REPLY_LOST=128 };
 typedef struct { uint32_t sequence; uint8_t code, result; } reply_event_t;
 static unsigned rx_index;
 static uint32_t rx_sequence, rx_started_us, rx_last_us, last_sequence;
@@ -16,13 +16,15 @@ static uint8_t rx_code;
 static bool rx_bad, rx_drop, have_sequence;
 static bool reply_pending;
 static reply_event_t pending_reply;
-static char reply_line[95];
+static char reply_line[138];
+static unsigned reply_length;
 static unsigned reply_index;
 static bool reply_building, reply_borrowed;
 static uint16_t reply_crc;
 static reply_event_t reply;
 static motor_log_snapshot_t reply_status;
 static motor_action_t reply_action;
+static motor_zero_snapshot_t reply_zero;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -125,7 +127,11 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
             if (have_sequence && (advance==0u || advance>=0x80000000u)) { result=REPLY_SEQUENCE; }
             else {
                 have_sequence=true; last_sequence=rx_sequence;
-                if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP) { result=REPLY_DENIED; }
+                if (rx_code==REQUEST_ZERO_RESTART) {
+                    if (!motor_runtime_restart_zero()) { result=REPLY_DENIED; }
+                } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS) {
+                    result=REPLY_DENIED;
+                }
             }
         }
         if (result!=REPLY_OK) { motor_runtime_communication_error(); }
@@ -147,6 +153,34 @@ static char hex_digit(uint32_t value, unsigned shift)
 /** 固定位置输出一字符；状态已经冻结，不在组帧过程中混读运行状态。 */
 static char reply_character(unsigned i)
 {
+    if (reply.code==REQUEST_ZERO_STATUS) {
+        static const char prefix[]="P1Z1,";
+        if (i<5u) { return prefix[i]; }
+        if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u
+            || i==54u || i==63u || i==72u || i==77u || i==82u || i==87u || i==92u
+            || i==95u || i==104u || i==113u || i==122u || i==131u) { return ','; }
+        if (i<=12u) { return hex_digit(reply.sequence,(12u-i)*4u); }
+        if (i<=15u) { return hex_digit(reply.code,(15u-i)*4u); }
+        if (i<=18u) { return hex_digit(reply.result,(18u-i)*4u); }
+        if (i<=21u) { return hex_digit((uint32_t)reply_status.state,(21u-i)*4u); }
+        if (i<=30u) { return hex_digit(reply_status.fault_flags,(30u-i)*4u); }
+        if (i<=39u) { return hex_digit(reply_status.sequence,(39u-i)*4u); }
+        if (i<=48u) { return hex_digit(reply_status.completed_us,(48u-i)*4u); }
+        if (i<=53u) { return hex_digit(reply_zero.offset.accepted_count,(53u-i)*4u); }
+        if (i<=62u) { return hex_digit(reply_zero.offset.sum_u_count,(62u-i)*4u); }
+        if (i<=71u) { return hex_digit(reply_zero.offset.sum_v_count,(71u-i)*4u); }
+        if (i<=76u) { return hex_digit(reply_zero.offset.minimum_u_count,(76u-i)*4u); }
+        if (i<=81u) { return hex_digit(reply_zero.offset.maximum_u_count,(81u-i)*4u); }
+        if (i<=86u) { return hex_digit(reply_zero.offset.minimum_v_count,(86u-i)*4u); }
+        if (i<=91u) { return hex_digit(reply_zero.offset.maximum_v_count,(91u-i)*4u); }
+        if (i<=94u) { return hex_digit(reply_zero.flags,(94u-i)*4u); }
+        if (i<=103u) { return hex_digit(reply_zero.scale_nA,(103u-i)*4u); }
+        if (i<=112u) { return hex_digit(reply_zero.began_us,(112u-i)*4u); }
+        if (i<=121u) { return hex_digit(reply_zero.ended_us,(121u-i)*4u); }
+        if (i<=130u) { return hex_digit(reply_zero.profile_id,(130u-i)*4u); }
+        if (i<=135u) { return hex_digit(reply_crc,(135u-i)*4u); }
+        return i==136u ? '\r' : '\n';
+    }
     static const char prefix[]="P1R2,";
     if (i<5u) { return prefix[i]; }
     if (i<=12u) { return hex_digit(reply.sequence,(12u-i)*4u); }
@@ -184,17 +218,22 @@ bool command_poll(uint32_t now_us)
         if (!motor_runtime_read_reply(&reply_status,&reply_action)) {
             motor_log_snapshot_t empty={0}; motor_action_t no_action={0}; reply_status=empty; reply_action=no_action; reply.result=REPLY_SNAPSHOT;
         }
+        reply_length=95u;
+        if (reply.code==REQUEST_ZERO_STATUS) {
+            reply_length=sizeof(reply_line);
+            if (!motor_runtime_read_zero(&reply_status,&reply_zero)) { reply.result=REPLY_SNAPSHOT; }
+        }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;
     }
     if (board_serial_is_busy()) { return true; }
     char byte=reply_character(reply_index);
     reply_line[reply_index]=byte;
-    if (reply_index<89u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
+    if (reply_index<reply_length-6u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
     reply_index++;
-    if (reply_index==sizeof(reply_line)) {
+    if (reply_index==reply_length) {
         reply_building=false;
-        reply_borrowed=board_start_serial_write(reply_line,sizeof(reply_line));
+        reply_borrowed=board_start_serial_write(reply_line,reply_length);
     }
     return true;
 }
