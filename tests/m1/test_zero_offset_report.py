@@ -15,8 +15,8 @@ def line(i, u=2000, v=2100, angle=16383, state=1, fault=0, interval_us=100000):
 
 raw = b"".join(line(i, 2000 + i % 2, 2100 + 2 * (i % 2), i % 2 * 16383) for i in range(32))
 result = summarize(raw)
-slow_raw = b"".join(line(i, interval_us=1000000) for i in range(32))
-assert summarize(slow_raw)["records"] == 32  # 每秒一条，跨设备时间回绕仍可分析。
+slow_raw = b"".join(line(i, interval_us=5000000) for i in range(32))
+assert summarize(slow_raw)["records"] == 32  # 每5秒一条，跨设备时间回绕仍可分析。
 assert result["records"] == 32 and result["angle_span_count"] == 1
 assert result["channels"]["u"]["mean_count"] == 2000.5
 assert result["channels"]["v"]["mean_count"] == 2101

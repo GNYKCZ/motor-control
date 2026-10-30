@@ -3,12 +3,13 @@
 #include "command.h"
 #include "board_io.h"
 #include "motor_runtime.h"
+#include "board_config.h"
 #include <stddef.h>
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
        REPLY_DENIED=4, REPLY_UART=5, REPLY_TIMEOUT=6, REPLY_SNAPSHOT=7 };
 enum { REQUEST_STATUS=1, REQUEST_STOP=2, REQUEST_ZERO_STATUS=5, REQUEST_ZERO_RESTART=6,
-       REQUEST_CURRENT_STATUS=7, REPLY_LOST=128 };
+       REQUEST_CURRENT_STATUS=7, REQUEST_SCAN_STATUS=8, REPLY_LOST=128 };
 typedef struct { uint32_t sequence; uint8_t code, result; } reply_event_t;
 static unsigned rx_index;
 static uint32_t rx_sequence, rx_started_us, rx_last_us, last_sequence;
@@ -17,7 +18,7 @@ static uint8_t rx_code;
 static bool rx_bad, rx_drop, have_sequence;
 static bool reply_pending;
 static reply_event_t pending_reply;
-static char reply_line[221];
+static char reply_line[248];
 static unsigned reply_length;
 static unsigned reply_index;
 static bool reply_building, reply_borrowed;
@@ -27,6 +28,11 @@ static motor_log_snapshot_t reply_status;
 static motor_action_t reply_action;
 static motor_zero_snapshot_t reply_zero;
 static motor_current_snapshot_t reply_current;
+static motor_scan_snapshot_t reply_scan;
+static uint32_t scan_fields[43];
+static const uint8_t scan_widths[43]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,
+    2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4};
+static unsigned scan_field, scan_digits;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -132,7 +138,7 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
                 if (rx_code==REQUEST_ZERO_RESTART) {
                     if (!motor_runtime_restart_zero()) { result=REPLY_DENIED; }
                 } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS
-                           && rx_code!=REQUEST_CURRENT_STATUS) {
+                           && rx_code!=(BOARD_SCAN_ENABLED ? REQUEST_SCAN_STATUS : REQUEST_CURRENT_STATUS)) {
                     result=REPLY_DENIED;
                 }
             }
@@ -156,7 +162,19 @@ static char hex_digit(uint32_t value, unsigned shift)
 /** 固定位置输出一字符；状态已经冻结，不在组帧过程中混读运行状态。 */
 static char reply_character(unsigned i)
 {
-    if (reply.code==REQUEST_ZERO_STATUS || reply.code==REQUEST_CURRENT_STATUS) {
+    if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
+        static const char prefix[]="P1A1,";
+        if (i<5u) { return prefix[i]; }
+        if (i>=242u && i<=245u) { return hex_digit(reply_crc,(245u-i)*4u); }
+        if (i>=246u) { return i==246u ? '\r' : '\n'; }
+        if (!scan_digits) {
+            scan_field++;
+            if (scan_field<43u) { scan_digits=scan_widths[scan_field]; }
+            return ',';
+        }
+        scan_digits--; return hex_digit(scan_fields[scan_field],scan_digits*4u);
+    }
+    if (reply.code==REQUEST_ZERO_STATUS || (reply.code==REQUEST_CURRENT_STATUS && !BOARD_SCAN_ENABLED)) {
         const char *prefix=reply.code==REQUEST_ZERO_STATUS ? "P1Z1," : "P1V1,";
         if (i<5u) { return prefix[i]; }
         if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u
@@ -244,9 +262,24 @@ bool command_poll(uint32_t now_us)
         if (reply.code==REQUEST_ZERO_STATUS) {
             reply_length=138u;
             if (!motor_runtime_read_zero(&reply_status,&reply_zero)) { reply.result=REPLY_SNAPSHOT; }
-        } else if (reply.code==REQUEST_CURRENT_STATUS) {
-            reply_length=sizeof(reply_line);
+        } else if (reply.code==REQUEST_CURRENT_STATUS && !BOARD_SCAN_ENABLED) {
+            reply_length=221u;
             if (!motor_runtime_read_current(&reply_status,&reply_zero,&reply_current)) { reply.result=REPLY_SNAPSHOT; }
+        } else if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
+            reply_length=sizeof(reply_line);
+            if (!motor_runtime_read_scan(&reply_status,&reply_scan)) { reply.result=REPLY_SNAPSHOT; }
+            uint32_t header[15]={reply.sequence,reply.code,reply.result,(uint32_t)reply_status.state,
+                reply_status.fault_flags,reply_scan.action_id,(uint8_t)reply_scan.direction,reply_scan.step,
+                reply_scan.done,reply_scan.reason,reply_scan.mask,reply_scan.origin,reply_scan.started_us,
+                reply_scan.ended_us,0x00010001u};
+            for (unsigned j=0u;j<15u;++j) { scan_fields[j]=header[j]; }
+            for (unsigned j=0u;j<7u;++j) {
+                scan_fields[15u+4u*j]=reply_scan.point[j].count;
+                scan_fields[16u+4u*j]=(uint32_t)reply_scan.point[j].sum;
+                scan_fields[17u+4u*j]=(uint16_t)reply_scan.point[j].minimum;
+                scan_fields[18u+4u*j]=(uint16_t)reply_scan.point[j].maximum;
+            }
+            scan_field=0u; scan_digits=scan_widths[0];
         }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;

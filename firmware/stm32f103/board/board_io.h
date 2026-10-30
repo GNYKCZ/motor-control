@@ -23,6 +23,8 @@ void board_initialize_output(void);
 bool board_output_is_ready(void);
 /** 已持runtime锁：装载三路预置并等自然UEV，不开MOE；generation用于拒绝撤销后的IRQ。 */
 bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation);
+/** ACTIVE扫描点预装：不写MOE、不用UG；下一自然UEV确认，失败先禁止调制。 */
+bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsigned step);
 /** 已持锁：设最近绝对设备us期限，比较值越过则返回false，禁止等16bit回绕。 */
 bool board_schedule_deadline(uint32_t deadline_us);
 /** 已持锁取消TIM3比较中断，不停止独立时基。 */
