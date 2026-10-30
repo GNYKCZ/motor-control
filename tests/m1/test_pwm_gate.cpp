@@ -63,7 +63,7 @@ void pwm_model_written(unsigned id, uint32_t value)
         #ifdef MOTOR_GATE_TEST_PROFILES
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
 #else
-        if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
+        if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
 #endif
             || pwm_tim1.CNT.value<=300u || (pwm_tim1.CR1.value & TIM_CR1_DIR)) { ++early_enables; }
         if (delay_after_moe) { pwm_tim1.CNT.value=1700u; }

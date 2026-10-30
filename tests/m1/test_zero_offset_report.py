@@ -88,7 +88,7 @@ assert len(frame) == 221 and current["ic"] == 19
 assert current["isu"]/19-current["su"]/512 == 73
 assert current["isv"]/19-current["sv"]/512 == -38
 for bad_prefix in (prefix.replace(b"0013,",b"0021,"), prefix.replace(b"0834,0834,",b"0835,0834,"),
-                   prefix.replace(b"0FFF,0FFF,00,00000001,",b"4000,0FFF,00,")):
+                   prefix.replace(b"0FFF,0FFF,00,00000001,",b"4000,0FFF,00,00000001,")):
     try:
         parse_line(bad_prefix + f"{binascii.crc_hqx(bad_prefix,0xFFFF):04X}\r\n".encode())
     except ValueError:
@@ -96,3 +96,11 @@ for bad_prefix in (prefix.replace(b"0013,",b"0021,"), prefix.replace(b"0834,0834
     else:
         raise AssertionError("invalid current capture accepted despite recomputed CRC")
 print("PASS P1I1: independent nonempty sums/signs, count/range/angle rejection")
+v_prefix = ("P1V1,00000004,07,00,01,00000000,000002BC,000AAE60,0200,000FD600,000FD800,"
+            "07EB,07EB,07EC,07EC,19,000C4B20,00000000,0007CC18,00020001,0013,"
+            f"{19*1990:08X},{19*2100:08X},07C6,07C6,0834,0834,00092C0C,0009725C,0FFF,0FFF,00,00000001,").encode()
+v_current = parse_line(v_prefix + f"{binascii.crc_hqx(v_prefix,0xFFFF):04X}\r\n".encode())
+assert v_current["format"] == "P1V1"
+assert v_current["isu"]/19-v_current["su"]/512 == -37
+assert v_current["isv"]/19-v_current["sv"]/512 == 72
+print("PASS P1V1: distinct V identity and independent swapped raw-current signs")

@@ -223,6 +223,6 @@ int main(void)
     CHECK(!fake_pwm); /* 重放ZERO_RESTART不能重开候选，更不能激励。 */
     start();before=disables;feed(vector(1u,7u));reply_done();
     CHECK(wire_length==221u && result()==0u && disables==before && !fake_pwm);
-    CHECK(strncmp(wire,"P1I1,",5u)==0);fputs(wire,stdout);
+    CHECK(strncmp(wire,"P1V1,",5u)==0);fputs(wire,stdout);
     return 0;
 }

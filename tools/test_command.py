@@ -83,7 +83,7 @@ def main():
         run(cpp + ["-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_uart.c", "-o", irq_object])
         run(cpp + [root / "tests/m1/test_uart_tc_race.cpp", irq_object, *model_objects, "-lm", "-o", output / "test_uart_tc_race.exe"])
         run([output / "test_uart_tc_race.exe"])
-        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R2,", "P1Z1,", "P1I1,", "M3B3,")))
+        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R2,", "P1Z1,", "P1V1,", "M3B3,")))
         records = [parse_line(line + b"\n") for line in stream.split(b"\n") if line]
         replies = [r for r in records if r["format"] == "P1R2"]
         if not replies or any(replies[0][key] != value for key, value in {"q": 1, "c": 1, "r": 0, "s": 1, "f": 0, "n": 25, "t": 2500}.items()):
@@ -123,11 +123,11 @@ def main():
                     pass
                 else:
                     raise RuntimeError("P1Z1 accepted one-bit corruption")
-        current_prefix = b"P1I1,00000001,07,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,0000,00000000,00000000,0000,0000,0000,0000,00000000,00000000,0000,0000,00,00000000,"
+        current_prefix = b"P1V1,00000001,07,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,0000,00000000,00000000,0000,0000,0000,0000,00000000,00000000,0000,0000,00,00000000,"
         current_golden = current_prefix + f"{binascii.crc_hqx(current_prefix,0xFFFF):04X}\r\n".encode()
-        current_actual = next(line+b"\n" for line in stream.split(b"\n") if line.startswith(b"P1I1,"))
+        current_actual = next(line+b"\n" for line in stream.split(b"\n") if line.startswith(b"P1V1,"))
         if current_actual != current_golden or parse_line(current_actual)["ic"] != 0:
-            raise RuntimeError("P1I1 independent 221B empty capture mismatch")
+            raise RuntimeError("P1V1 independent 221B empty capture mismatch")
         for i in range(221):
             for bit in range(8):
                 corrupted = bytearray(current_actual); corrupted[i] ^= 1 << bit
@@ -136,7 +136,7 @@ def main():
                 except ValueError:
                     pass
                 else:
-                    raise RuntimeError("P1I1 accepted one-bit corruption")
+                    raise RuntimeError("P1V1 accepted one-bit corruption")
         zero_prefix = b"P1R2,00000002,01,00,01,00000000,00000001,00000000,00000001,FFFFFF00,00000000,00000000,C4,"
         zero_frame = zero_prefix + f"{binascii.crc_hqx(zero_prefix,0xFFFF):04X}\r\n".encode()
         zero = parse_line(zero_frame)
