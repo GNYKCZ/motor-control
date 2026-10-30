@@ -70,6 +70,19 @@ def main():
                 if scan["done"]!=1 or scan["mask"]!=127 or scan["direction"]!=(-1 if tag.endswith("reverse") else 1):
                     raise RuntimeError("production scan snapshot does not match completed model")
                 scan_reports.append(analyze(scan))
+            if tag=="scan_forward":
+                old_window=output/"scan_window_old.c"
+                old_window.write_bytes(subprocess.check_output(["git","show",
+                    "2371c5b85d5fb538c63c091ffbcf5e78cec513a9:firmware/stm32f103/app/motor_runtime.c"],cwd=root))
+                old_window_obj=output/"scan_window_old.o"
+                run([gcc,"-std=c11",*flags,"-c",old_window,"-o",old_window_obj])
+                old_window_exe=output/"scan_window_old.exe"
+                run([*cpp,root/"tests/m1/test_pwm_gate.cpp",board,old_window_obj,*objects[1:],"-lm","-o",old_window_exe])
+                boundary=subprocess.run([str(old_window_exe)],cwd=root,env=environment,capture_output=True,text=True,timeout=30)
+                if boundary.returncode==0 or "scan.point[0].count==0u" not in boundary.stderr:
+                    raise RuntimeError("scan window RV-001 did not reject ADC-completion-based admission")
+                evidence["scan_window_RV001"]={"returncode":boundary.returncode,"output":boundary.stdout+boundary.stderr,
+                    "runtime_sha256":hashlib.sha256(old_window.read_bytes()).hexdigest()}
             if tag=="production":
                 # 带流RV-001：旧实现只看ADC完成时间，同一跨开门边界夹具必须失败。
                 old_runtime = output / "current_boundary_old.c"

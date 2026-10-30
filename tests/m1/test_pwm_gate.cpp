@@ -343,6 +343,23 @@ int main()
         button_steps(true,21u);button_steps(false,21u);open_window();
         CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
     };
+    // 扫描RV-001：SSI在150ms前、ADC在150ms完成，不得算入稳定窗口；同时跨32位时标回绕。
+    reset(0xfff00000u);fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);button_steps(true,21u);button_steps(false,21u);open_window();
+    for (unsigned i=0u;i<149u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=15u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==0u);
+    fixed_count=0u;
+    for (unsigned i=0u;i<49u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=14u;pwm_tim1.CNT.value=1000u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==50u && scan.point[0].sum==14);
+    CHECK(scan.point[0].maximum==14 && (scan.mask & 1u)); /* SSI结束在200ms前、ADC到200ms才发布的最后帧保留。 */
+    motor_runtime_stop();check_closed();
+    start_scan();
+    for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+    now_us+=1028u;fixed_count=15u;pwm_tim1.CNT.value=1000u;sample(); /* SSI结束恰好200000us，排除。 */
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==49u && scan.point[0].sum==0);
+    motor_runtime_stop();check_closed();
     // 整个最后50ms只有25帧，不得用延时或其他点补齐。
     start_scan();
     for (unsigned i=0u;i<150u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
@@ -356,7 +373,7 @@ int main()
     motor_runtime_stop();check_closed();
     start_scan();
     for (unsigned i=0u;i<150u;++i) { now_us+=1000u;sample(); }
-    for (unsigned i=0u;i<63u;++i) { now_us+=100u;sample(); }
+    for (unsigned i=0u;i<64u;++i) { now_us+=100u;sample(); }
     CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==64u && !scan.reason);
     now_us+=100u;sample();check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==8u);
     start_scan();

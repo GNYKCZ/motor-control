@@ -369,6 +369,18 @@ static void scan_step_sample(const motor_sample_t *sample)
     uint32_t elapsed=sample->current_completed_us-scan_applied_us;
     if (elapsed>=0x80000000u) { return; }
     motor_scan_point_t *point=&scan_capture.point[scan_capture.step];
+    /* 稳定窗口属于角度采集，不属于ADC发布：整帧SSI必须落在[150ms,200ms)。
+     * 先收窗口内最后一帧，再结束点；允许其ADC完成稍晚于200ms，不夹带窗口前角度。 */
+    uint32_t angle_began=sample->encoder.read_started_us-scan_applied_us;
+    uint32_t angle_ended=sample->encoder.read_completed_us-scan_applied_us;
+    if (angle_began>=150000u && angle_began<200000u && angle_ended<200000u) {
+        if (point->count>=64u) { scan_capture.reason=8u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return; }
+        int16_t position=(int16_t)(position_count-action_origin);
+        if (!point->count) { point->minimum=position; point->maximum=position; }
+        if (position<point->minimum) { point->minimum=position; }
+        if (position>point->maximum) { point->maximum=position; }
+        point->sum+=position; point->count++;
+    }
     if (elapsed>=200000u) {
         if (point->count<40u || point->maximum-point->minimum>=16) {
             scan_capture.reason=7u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
@@ -388,15 +400,6 @@ static void scan_step_sample(const motor_sample_t *sample)
             scan_capture.reason=6u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
         }
         return;
-    }
-    if (elapsed>=150000u && sample->encoder.read_started_us-scan_applied_us>0u
-        && sample->encoder.read_started_us-scan_applied_us<0x80000000u) {
-        if (point->count>=64u) { scan_capture.reason=8u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return; }
-        int16_t position=(int16_t)(position_count-action_origin);
-        if (!point->count) { point->minimum=position; point->maximum=position; }
-        if (position<point->minimum) { point->minimum=position; }
-        if (position>point->maximum) { point->maximum=position; }
-        point->sum+=position; point->count++;
     }
 }
 #endif
