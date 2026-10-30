@@ -365,9 +365,13 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
                 runtime_status.sample.encoder.sequence);
         }
     }
-    /* 先保留触发位移保护的最后一个有效样本；尚未开门/截止后的数据不得冒充带流。
+    /* 固定时序SSI200us先于ADC250us：要求本帧SSI实际开始也严格晚于开门，
+     * 保守排除开门前采集、开门后才完成/发布的跨边界帧，不能只看ADC完成时间。
+     * 先保留触发位移保护的最后一个有效样本；尚未开门/截止后的数据不得冒充带流。
      * 最多32帧，仅整数和/极值，无IRQ格式化；超容量冻结并标记，不覆盖早期证据。 */
     if (is_valid && runtime_status.state==MOTOR_RUNTIME_ACTIVE && (last_action.timing_flags & 0x80u)
+        && sample->encoder.read_started_us-last_action.started_us>0u
+        && sample->encoder.read_started_us-last_action.started_us<0x80000000u
         && sample->current_completed_us-last_action.started_us<0x80000000u
         && (int32_t)(sample->current_completed_us-pulse_deadline_us)<0) {
         sensor_offset_t *stats=&current_capture.samples;

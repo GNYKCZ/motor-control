@@ -226,6 +226,16 @@ int main()
     CHECK(motor_runtime_read_current(&log,&current_zero,&current));
     CHECK(current.samples.accepted_count==32u && current.samples.sum_u_count==32u*2100u && current.overflow==1u);
     motor_runtime_stop();check_closed();
+    // RV-001：采集从开门前开始、ADC完成却在开门后；极端原始值不得污染带流统计。
+    still_ready();button_steps(true,21u);button_steps(false,21u);open_window();
+    now_us+=1u;sample(true,4095u,0u);
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==0u);
+    now_us+=1000u;sample(true,2100u,1990u);
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==1u && current.samples.sum_u_count==2100u
+        && current.samples.sum_v_count==1990u);
+    motor_runtime_stop();check_closed();
     // 内部资格/调度调用有耗时，20000us仍从物理释放接受时起算。
     still_ready();button_steps(true,21u);clock_step=2u;button_steps(false,21u);clock_step=0u;
     CHECK(motor_runtime_read_reply(&log,&action));open_window();
