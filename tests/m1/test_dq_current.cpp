@@ -7,6 +7,16 @@ extern "C" {
 #define main historical_gate_main
 #include "test_pwm_gate.cpp"
 #undef main
+static uint32_t feedback_delay;
+extern "C" void __real_motor_runtime_poll_feedback(void);
+extern "C" void __wrap_motor_runtime_poll_feedback(void) { __real_motor_runtime_poll_feedback();now_us+=feedback_delay; }
+static uint32_t HAL_GetTick(void) { return now_us/1000u; }
+static void telemetry_poll_status(uint32_t) {}
+#ifdef TEST_OLD_DQ_ORDER
+#include "dq_production_loop_old.h"
+#else
+#include "dq_production_loop.h"
+#endif
 
 static void dq_prepare(uint16_t angle=7453u)
 {
@@ -78,6 +88,11 @@ int main(void)
         current_loop_poll();trace=false;if (kind==2u) { TIM1_BRK_IRQHandler(); }
         motor_runtime_stop();natural_update();TIM1_UP_IRQHandler();check_closed();CHECK(enables==1u);
     }
+    // 直接编译main USER3实际前台顺序，低优先任务耗时300us不阻碍先提交电流包。
+    dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));now_us+=227u;sample(false,2027u,2028u);
+    feedback_delay=300u;production_poll_iteration();feedback_delay=0u;
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE);now_us=action.started_us+1000u;natural_update();TIM1_UP_IRQHandler();
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE);motor_runtime_stop();check_closed();
     std::puts("PASS actual DQ runtime/board/current_control: zero and fixed signed references, four angles, bounded RL, trace, STOP/Break, mailbox overwrite, raw trip, movement, deadline, one gesture");
     return 0;
 }

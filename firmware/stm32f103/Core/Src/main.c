@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/* Firmware version: 31-18-56 | 2026-10-31 18:56 Asia/Shanghai */
+/* Firmware version: 31-19-28 | 2026-10-31 19:28 Asia/Shanghai */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -130,10 +130,10 @@ int main(void)
     uint32_t now_us = board_get_time_us();
     motor_runtime_check_deadline(now_us);
     motor_runtime_poll_button((GPIOA->IDR & GPIO_PIN_12)==0u, now_us);
-    motor_runtime_poll_feedback();
 #if BOARD_DQ_CURRENT_LOOP
-    current_loop_poll();
+    current_loop_poll(); /* 先处理1kHz电流包，再进行较低频反馈计算。 */
 #endif
+    motor_runtime_poll_feedback();
     if (!command_poll(now_us)) {
 #if BOARD_DQ_CURRENT_LOOP
         if (!current_loop_report_poll())
