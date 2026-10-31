@@ -46,6 +46,130 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
+    if raw.startswith(b"FW1,"):
+        match=re.fullmatch(rb"FW1,([0-9]{2}-[0-9]{2}-[0-9]{2}),(ALIGN_POS|ALIGN_NEG|SCAN_POS|SCAN_NEG|GATE_TEST|PULSE_V_TEST)\r\n",raw)
+        if not match:
+            raise ValueError("firmware banner layout mismatch")
+        day,hour,minute=map(int,match[1].split(b"-"))
+        if not 1<=day<=31 or hour>23 or minute>59:
+            raise ValueError("firmware banner date/time range")
+        return {"format":"FW1","version":match[1].decode(),"mode":match[2].decode(),"diagnostic_only":True}
+    if raw.startswith(b"P1F1,"):
+        # 固定提示不带CRC，仅辅助观察；不能充当真实数据/校准或动作成功证据。
+        hints={b"WAIT_STILL",b"COLLECT_ZERO",b"READY_PRESS_PA12",b"FAILED_INPUT",b"FAILED_NOT_STILL",
+               b"FAILED_ZERO_INVALID",b"FAILED_ZERO_TIMEOUT",b"ACTION_DONE",b"ACTION_FAILED",b"FAILED_STOP"}
+        hint=raw[5:-2]
+        if not raw.endswith(b"\r\n") or hint not in hints:
+            raise ValueError("P1F1 hint mismatch")
+        return {"format":"P1F1","hint":hint.decode("ascii"),"diagnostic_only":True}
+    if raw.startswith((b"P1A1,", b"P1A2,")):
+        alignment=raw.startswith(b"P1A2,")
+        name="P1A2" if alignment else "P1A1"
+        header="q c r s f id direction step done reason mask origin start end cfg".split()
+        widths=[8,2,2,2,8,8,2,2,2,2,2,4,8,8,8]
+        if alignment:
+            header += ["requested"]; widths += [8]
+        stride=6 if alignment else 4
+        count=2 if alignment else 7
+        widths += ([2,8,4,4,8,8] if alignment else [2,8,4,4])*count+[4]
+        pattern=name.encode()+b","+b",".join(rb"([0-9A-F]{"+str(w).encode()+rb"})" for w in widths)+rb"\r\n"
+        match=re.fullmatch(pattern,raw)
+        if not match or len(raw)!=(183 if alignment else 248):
+            raise ValueError(name+" layout mismatch")
+        values=[int(v,16) for v in match.groups()]
+        if binascii.crc_hqx(raw[:-6],0xFFFF)!=values[-1]:
+            raise ValueError(name+" CRC mismatch")
+        fields=dict(zip(header,values[:len(header)]))
+        if fields["c"]!=8 or fields["r"] & 127 > 7 or fields["s"]>5 or fields["direction"] not in (1,255):
+            raise ValueError(name+" header mismatch")
+        fields["direction"]=1 if fields["direction"]==1 else -1
+        full_mask=(1<<count)-1
+        if fields["step"]>=count or fields["done"]>1 or fields["reason"]>10 or fields["mask"]>full_mask or fields["origin"]>16383 or fields["cfg"]!=(0x20001 if alignment else 0x10001):
+            raise ValueError(name+" sequence metadata mismatch")
+        points=[]
+        for i in range(count):
+            j=len(header)+stride*i
+            n,total,lo,hi=values[j:j+4]
+            total=total if total<2**31 else total-2**32
+            lo=lo if lo<32768 else lo-65536
+            hi=hi if hi<32768 else hi-65536
+            if n>64 or not -4000<=lo<=hi<=4000 or not n*lo<=total<=n*hi:
+                raise ValueError(name+" point range/sum mismatch")
+            if not n and (total or lo or hi):
+                raise ValueError(name+" empty point contradicts data")
+            if fields["mask"] & (1<<i) and (n<40 or hi-lo>=16):
+                raise ValueError(name+" completed point lacks stable samples")
+            point=dict(count=n,sum_count=total,minimum=lo,maximum=hi)
+            if alignment:
+                point.update(start=values[j+4],end=values[j+5])
+                if fields["mask"] & (1<<i) and not 200000 <= (point["end"]-point["start"]) & 0xffffffff <= 203000:
+                    raise ValueError(name+" point timing mismatch")
+            points.append(point)
+        if fields["done"] and (fields["s"]!=1 or fields["f"] or fields["r"] or fields["step"]!=count-1 or fields["mask"]!=full_mask or fields["reason"]!=1):
+            raise ValueError(name+" completion contradicts status")
+        if not fields["id"] and (fields["start"] or fields["end"] or fields["mask"] or any(p["count"] for p in points)
+                                  or (alignment and (fields["requested"] or any(p["start"] or p["end"] for p in points)))):
+            raise ValueError(name+" data without action")
+        if alignment and fields["done"]:
+            gap=(points[1]["start"]-points[0]["end"]) & 0xffffffff
+            if (fields["start"]!=points[0]["start"] or gap>=2000
+                or (fields["end"]-points[1]["end"]) & 0xffffffff > 3000
+                or not 0 < (fields["end"]-fields["requested"]) & 0xffffffff <= 420000):
+                raise ValueError(name+" overall timing mismatch")
+        return {"format":name,**fields,"points":points,"crc":values[-1]}
+    if raw.startswith((b"P1Z1,", b"P1I1,", b"P1V1,")):
+        current = not raw.startswith(b"P1Z1,")
+        widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8]
+        keys = "q c r s f n t cn su sv umin umax vmin vmax fl scale beg end cfg".split()
+        if current:
+            widths += [4, 8, 8, 4, 4, 4, 4, 8, 8, 4, 4, 2, 8]
+            keys += "ic isu isv iumin iumax ivmin ivmax ibeg iend a0 a1 overflow iid".split()
+        widths += [4]
+        keys += ["crc"]
+        pattern = raw[:5] + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
+        match = re.fullmatch(pattern, raw)
+        if not match or len(raw) != (221 if current else 138):
+            raise ValueError("P1Z1 layout mismatch")
+        values = [int(value, 16) for value in match.groups()]
+        if binascii.crc_hqx(raw[:-6], 0xFFFF) != values[-1]:
+            raise ValueError("P1Z1 CRC mismatch")
+        fields = dict(zip(keys, values))
+        if fields["c"] != (7 if current else 5) or fields["s"] > 5 or fields["r"] & 0x7F > 7 or fields["cn"] > 512:
+            raise ValueError("P1Z1 command/state/count out of range")
+        count, flags = fields["cn"], fields["fl"]
+        if flags & ~31 or not flags & 8 or bool(flags & 1) != (count == 512):
+            raise ValueError("P1Z1 candidate flags mismatch")
+        if not fields["scale"] or not fields["cfg"]:
+            raise ValueError("P1Z1 missing configuration or nominal scale")
+        if not count and any(fields[k] for k in ("su", "sv", "umin", "umax", "vmin", "vmax", "beg", "end")):
+            raise ValueError("P1Z1 empty candidate contradicts data")
+        for channel in ("u", "v"):
+            low, high, total = fields[channel + "min"], fields[channel + "max"], fields["s" + channel]
+            if not 0 <= low <= high <= 4095 or not count * low <= total <= count * high:
+                raise ValueError("P1Z1 candidate sum/range mismatch")
+        if count and (fields["end"] - fields["beg"]) & 0xFFFFFFFF > (count - 1) * 3000:
+            raise ValueError("P1Z1 candidate time order/gap mismatch")
+        if count and (fields["t"] - fields["end"]) & 0xFFFFFFFF >= 0x80000000:
+            raise ValueError("P1Z1 snapshot predates candidate")
+        if current:
+            count = fields["ic"]
+            if count > 32 or fields["overflow"] > 1 or max(fields["a0"], fields["a1"]) > 16383:
+                raise ValueError("P1I1 count/angle/overflow mismatch")
+            if fields["overflow"] and count != 32:
+                raise ValueError("P1I1 overflow without full buffer")
+            if count and not fields["iid"]:
+                raise ValueError("P1I1 missing action identity")
+            if not count and any(fields[k] for k in keys if k.startswith("i") or k in ("a0", "a1", "overflow")):
+                raise ValueError("P1I1 empty capture contradicts data")
+            for channel in ("u", "v"):
+                lo, hi, total = (fields[k] for k in ("i"+channel+"min", "i"+channel+"max", "is"+channel))
+                if not 0 <= lo <= hi <= 4095 or not count*lo <= total <= count*hi:
+                    raise ValueError("P1I1 sum/range mismatch")
+            if count and ((fields["iend"]-fields["ibeg"]) & 0xFFFFFFFF) > (count-1)*3000:
+                raise ValueError("P1I1 capture time/gap mismatch")
+            if count and ((fields["t"]-fields["iend"]) & 0xFFFFFFFF) >= 0x80000000:
+                raise ValueError("P1I1 snapshot predates capture")
+        return {"format": raw[:4].decode("ascii"), **fields}
     if raw.startswith(b"P1R2,"):
         widths = [8, 2, 2, 2, 8, 8, 8, 8, 8, 8, 8, 2, 4]
         pattern = b"P1R2," + b",".join(rb"([0-9A-F]{" + str(w).encode() + rb"})" for w in widths) + rb"\r\n"
@@ -194,7 +318,11 @@ def save_chunks(chunks, output, metadata):
                 if len(line) > 2048:
                     raise ValueError("line exceeds 2048-byte parser bound")
                 record["fields"] = parse_line(line)
-                record["device_time_us"] = record["fields"]["t"]
+                record["device_time_us"] = record["fields"].get("t")
+                if record["fields"]["format"] in ("P1A1","P1A2"):
+                    record["device_time_kind"]="scan_window_only; see start/end, no snapshot timestamp"
+                elif record["fields"]["format"] in ("P1F1","FW1"):
+                    record["device_time_kind"]="diagnostic_hint_only; no device timestamp or CRC"
                 info["valid_lines"] += 1
             except (ValueError, UnicodeError) as error:
                 record["error"] = str(error)

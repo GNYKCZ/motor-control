@@ -1,4 +1,4 @@
-"""一次连接的开口诊断：默认不打开端口；可先被动接收，再显式发送一次STATUS或STOP。"""
+"""一次连接的开口诊断：默认不打开端口；先被动接收，再显式发送一次状态/STOP/零偏命令。"""
 import argparse
 import json
 import math
@@ -9,18 +9,20 @@ from command_link import make_command
 from sensor_capture import save_chunks
 
 
-def capture_session(connection, output, metadata, before=2.0, after=2.0, status_seq=None, clock=time.monotonic, stop_seq=None):
+def capture_session(connection, output, metadata, before=2.0, after=2.0, status_seq=None, clock=time.monotonic,
+                    stop_seq=None, zero_status_seq=None, zero_restart_seq=None):
     """connection已打开；不flush/reset，不重发。clock可替换以离线核对时间与字节。"""
     if (not all(math.isfinite(v) and 0.1 <= v <= 60 for v in (before, after))
             or (status_seq is not None and not 0 <= status_seq <= 0xFFFFFFFF)):
         raise ValueError("before/after需要0.1..60秒，序号需要uint32")
-    if stop_seq is not None and (status_seq is not None or not 0 <= stop_seq <= 0xFFFFFFFF):
-        raise ValueError("STATUS/STOP互斥，stop-seq需要uint32")
+    requested = [(name, seq) for name, seq in (("status", status_seq), ("stop", stop_seq),
+                 ("zero-status", zero_status_seq), ("zero-restart", zero_restart_seq)) if seq is not None]
+    if len(requested) > 1 or any(not 0 <= seq <= 0xFFFFFFFF for _, seq in requested):
+        raise ValueError("命令互斥，序号需要uint32")
     output = Path(output)
     if output.exists():
         raise FileExistsError("output already exists")
-    request_command = "stop" if stop_seq is not None else "status" if status_seq is not None else None
-    request_sequence = stop_seq if stop_seq is not None else status_seq
+    request_command, request_sequence = requested[0] if requested else (None, None)
     frame = make_command(request_sequence, request_command) if request_command else None
     result = {"status_requested": status_seq is not None, "stop_requested": stop_seq is not None,
               "requested_command": request_command, "requested_sequence": request_sequence, "write_attempted": False,
@@ -82,6 +84,7 @@ def capture_session(connection, output, metadata, before=2.0, after=2.0, status_
         info = save_chunks(chunks(), output, {**metadata, "diagnostic": "session_probe_v1",
                            "before_seconds": before, "after_seconds": after,
                            "status_seq": status_seq, "stop_seq": stop_seq,
+                           "zero_status_seq": zero_status_seq, "zero_restart_seq": zero_restart_seq,
                            "requested_command": request_command, "requested_sequence": request_sequence, "start_monotonic": start,
                            "timing_note": "host read/write calls; not USB packet or MCU timestamps"})
         result["valid_lines"] = info["valid_lines"]
@@ -103,7 +106,9 @@ def main():
     parser.add_argument("--output", type=Path)
     choice = parser.add_mutually_exclusive_group()
     choice.add_argument("--stop-seq", type=lambda value: int(value, 0), help="显式发送一次新序号STOP；不代表独立急停")
-    choice.add_argument("--status-seq", type=lambda value: int(value, 0), help="显式发送一次新序号STATUS；两种序号都省略则全程只读")
+    choice.add_argument("--status-seq", type=lambda value: int(value, 0), help="显式发送一次新序号STATUS；全部命令省略则全程只读")
+    choice.add_argument("--zero-status-seq", type=lambda value: int(value, 0), help="只查询完整零偏候选，不应用参数")
+    choice.add_argument("--zero-restart-seq", type=lambda value: int(value, 0), help="只重开统计批次，不请求输出")
     parser.add_argument("--before", type=float, default=2.0)
     parser.add_argument("--after", type=float, default=2.0)
     parser.add_argument("--firmware-sha")
@@ -113,10 +118,14 @@ def main():
     args = parser.parse_args()
     if not all(math.isfinite(v) and 0.1 <= v <= 60 for v in (args.before, args.after)):
         parser.error("before/after需要0.1..60秒")
-    for seq in (args.status_seq, args.stop_seq):
+    for seq in (args.status_seq, args.stop_seq, args.zero_status_seq, args.zero_restart_seq):
         if seq is not None and not 0 <= seq <= 0xFFFFFFFF:
             parser.error("命令序号需要uint32新序号")
     request_label = f"一次STOP seq={args.stop_seq}；" if args.stop_seq is not None else "不发送命令；" if args.status_seq is None else f"一次STATUS seq={args.status_seq}；"
+    if args.zero_status_seq is not None:
+        request_label = f"一次ZERO-STATUS seq={args.zero_status_seq}；"
+    if args.zero_restart_seq is not None:
+        request_label = f"一次ZERO-RESTART seq={args.zero_restart_seq}；"
     if not args.port:
         print(f"预览：先只读{args.before}秒；" + request_label + f"继续接收{args.after}秒。未打开串口。")
         return
@@ -140,7 +149,8 @@ def main():
                                  {"source_kind": "unverified_capture", "source": args.port,
                                   "firmware_sha": args.firmware_sha, "board": args.board,
                                   "motor": args.motor, "supply": args.supply, "baud": 115200},
-                                 args.before, args.after, args.status_seq, stop_seq=args.stop_seq)
+                                 args.before, args.after, args.status_seq, stop_seq=args.stop_seq,
+                                 zero_status_seq=args.zero_status_seq, zero_restart_seq=args.zero_restart_seq)
         print(json.dumps(result, ensure_ascii=False))
     finally:
         connection.close()

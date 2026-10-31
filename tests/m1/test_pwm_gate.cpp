@@ -2,6 +2,7 @@
  * 合成profile和寄存器模型仅用于主机；不证明桥电气行为、延迟或电流安全。 */
 #include "linkage.h"
 #include "main.h"
+#include "board_config.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +63,12 @@ void pwm_model_written(unsigned id, uint32_t value)
         ++enables;
         #ifdef MOTOR_GATE_TEST_PROFILES
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
+#elif defined(MOTOR_LOCAL_PULSE_BASELINE)
+        if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#elif BOARD_ALIGNMENT_MODE == 1
+        if (active_ticks[0]!=60u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#elif BOARD_ALIGNMENT_MODE == -1
+        if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=60u
 #else
         if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #endif
@@ -81,25 +88,46 @@ void board_leave_critical(uint32_t old)
     if (!mask && queued_stop) { queued_stop=false; motor_runtime_stop(); }
 }
 uint32_t board_get_time_us(void) { if (advancing_ticks) { advance_timer(36u); } uint32_t old=now_us;now_us+=clock_step;return old; }
+#if BOARD_SCAN_ENABLED
+static char scan_wire[257];
+static bool capture_flow;
+static unsigned flow_count;
+static char flow_lines[16][257];
+static unsigned count_flow(const char *prefix)
+{
+    unsigned count=0u;
+    for (unsigned i=0u;i<flow_count;++i) { if (std::strncmp(flow_lines[i],prefix,std::strlen(prefix))==0) { ++count; } }
+    return count;
+}
+bool board_serial_is_busy(void) { return false; }
+bool board_start_serial_write(const char *bytes,uint32_t length)
+{ CHECK(length<=256u);std::memcpy(scan_wire,bytes,length);scan_wire[length]='\0';
+  if (capture_flow) { CHECK(flow_count<16u);std::memcpy(flow_lines[flow_count++],scan_wire,length+1u); }
+  return true; }
+#else
 bool board_serial_is_busy(void) { return true; }
 bool board_start_serial_write(const char *,uint32_t) { return false; }
+#endif
 
 static motor_status_t status()
 {
     motor_status_t s;CHECK(motor_runtime_read_status(&s));return s;
 }
-static void sample(bool poll=true)
+static void sample(bool poll=true,uint16_t raw_u=2027u,uint16_t raw_v=2028u)
 {
     ++sequence;
     board_encoder_frame_t e={};
     e.sequence=sequence;e.raw_angle_count=fixed_angle ? fixed_count : (uint16_t)(sequence & 16383u);
     e.read_started_us=now_us-50u;e.read_completed_us=now_us-28u;e.is_valid=true;
-    motor_sample_t s=board_make_sample(sequence,now_us,2027u,2028u,&e);
+    motor_sample_t s=board_make_sample(sequence,now_us,raw_u,raw_v,&e);
     motor_runtime_handle_sample(&s);
     if (poll) { motor_runtime_poll_feedback(); }
 }
 static void reset(uint32_t base=0u)
 {
+#if BOARD_SCAN_ENABLED
+    capture_flow=false;flow_count=0u;
+#endif
     trace=false;inject_at=0u;inject_kind=0u;access_count=0u;queued_stop=false;mask=0u;
     advancing_ticks=0u;fraction_ticks=0u;
     fixed_angle=false; delay_after_moe=false; fixed_count=0u;
@@ -147,11 +175,39 @@ static void still_ready()
 {
     reset();fixed_angle=true;button_steps(false,300u);
 }
+#if BOARD_ALIGNMENT_MODE
+static void automatic_steps(bool pressed, unsigned count, bool noisy=false)
+{
+    for (unsigned i=0u;i<count;++i) {
+        now_us+=1000u;sample(true,(uint16_t)(2027u+(noisy && (i & 1u) ? 40u : 0u)),2028u);motor_runtime_poll_button(pressed,now_us);
+        for (unsigned j=0u;j<8u;++j) { (void)command_poll(now_us); }
+    }
+}
+#endif
 int main()
 {
     (void)timer_tick; (void)button_steps; (void)still_ready;
+#if BOARD_SCAN_ENABLED
+    (void)count_flow;
+#endif
     reset();
-#ifndef MOTOR_GATE_TEST_PROFILES
+#if defined(MOTOR_LOCAL_PULSE_BASELINE)
+    // 完整低频零偏批：显式重开不使能，512个1ms样本，时间窗/整数和独立核对。
+    still_ready();CHECK(motor_runtime_restart_zero());unsigned zero_enables=enables;
+    motor_log_snapshot_t zero_log; motor_zero_snapshot_t zero;
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && zero.offset.accepted_count==0u);
+    uint32_t zero_first=now_us+1000u;
+    button_steps(false,512u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero));
+    CHECK(zero.offset.accepted_count==512u && zero.offset.sum_u_count==2027u*512u
+        && zero.offset.sum_v_count==2028u*512u && zero.flags==0x1du);
+    CHECK(zero.began_us==zero_first && zero.ended_us-zero.began_us==511000u && enables==zero_enables);
+    CHECK(!status().calibration_verified);
+    CHECK(motor_runtime_restart_zero());button_steps(false,10u);fixed_count=16u;button_steps(false,1u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && (zero.flags & 2u) && zero.offset.accepted_count==10u);
+    fixed_count=0u;button_steps(false,600u);
+    CHECK(motor_runtime_read_zero(&zero_log,&zero) && (zero.flags & 2u) && zero.offset.accepted_count==10u);
+    reset();CHECK(!motor_runtime_restart_zero()); /* 没有静止暖机不能重开。 */
     // 比较事件+300tick进入延迟，每次寄存器访问4tick、取时36tick的明确压力场景。
     // 从实际CCR4起算，不把CNT固定在一个永不消失的窗口中。
     still_ready();button_steps(true,21u);button_steps(false,21u);
@@ -187,16 +243,39 @@ int main()
     motor_log_snapshot_t log; motor_action_t action;
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.id==1u && action.reason==MOTOR_ACTION_ACTIVE && (action.timing_flags & 0x80u));
-    for (unsigned i=0u;i<19u;++i) { timer_tick(1000u);sample(); }
+    for (unsigned i=0u;i<19u;++i) { timer_tick(1000u);sample(true,2100u,1990u); }
     timer_tick(999u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
     timer_tick(1u);check_closed();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
     CHECK(motor_runtime_read_reply(&log,&action));
     CHECK(action.reason==MOTOR_ACTION_DURATION && action.timing_flags==0xc0u);
     CHECK(action.ended_us-action.requested_us==20000u);
+    motor_zero_snapshot_t current_zero;motor_current_snapshot_t current;
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==19u && current.samples.sum_u_count==19u*2100u
+        && current.samples.sum_v_count==19u*1990u && !current.overflow && current.action_id==action.id);
+    CHECK(current.began_us-action.started_us==1000u && current.ended_us-current.began_us==18000u);
+    now_us+=1000u;sample();CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==19u); /* 关闭后的样本不能污染诊断。 */
     for (unsigned ms=0u;ms<60u;++ms) {
         now_us+=1000u;motor_runtime_poll_button(ms<30u,now_us);
     }
     open_window();check_closed();CHECK(enables==1u);
+    // 超容量只标诊断溢出，不覆盖前32帧，也不改变已有动作门控。
+    still_ready();button_steps(true,21u);button_steps(false,21u);open_window();
+    for (unsigned i=0u;i<33u;++i) { now_us+=100u;sample(true,2100u,1990u); }
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==32u && current.samples.sum_u_count==32u*2100u && current.overflow==1u);
+    motor_runtime_stop();check_closed();
+    // RV-001：采集从开门前开始、ADC完成却在开门后；极端原始值不得污染带流统计。
+    still_ready();button_steps(true,21u);button_steps(false,21u);open_window();
+    now_us+=1u;sample(true,4095u,0u);
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==0u);
+    now_us+=1000u;sample(true,2100u,1990u);
+    CHECK(motor_runtime_read_current(&log,&current_zero,&current));
+    CHECK(current.samples.accepted_count==1u && current.samples.sum_u_count==2100u
+        && current.samples.sum_v_count==1990u);
+    motor_runtime_stop();check_closed();
     // 内部资格/调度调用有耗时，20000us仍从物理释放接受时起算。
     still_ready();button_steps(true,21u);clock_step=2u;button_steps(false,21u);clock_step=0u;
     CHECK(motor_runtime_read_reply(&log,&action));open_window();
@@ -257,6 +336,170 @@ int main()
     button_steps(true,21u);button_steps(false,21u);open_window();check_closed();
     CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
     std::puts("PASS production: local released gesture only, one attempt/boot, twenty-ms deadline and valid action timestamps");
+#elif BOARD_SCAN_ENABLED
+    fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);
+    open_window();check_closed();CHECK(enables==0u); /* 未显式零偏不得启动长扫描。 */
+    reset(0xfff00000u);fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);open_window();
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+    const unsigned oracle[7][3]={{60,0,0},{60,60,0},{0,60,0},{0,60,60},{0,0,60},{60,0,60},{60,0,0}};
+    motor_log_snapshot_t log;motor_scan_snapshot_t scan;
+    for (unsigned point=0u;point<BOARD_SEQUENCE_POINTS;++point) {
+        unsigned index=BOARD_ALIGNMENT_MODE ? (point==0u ? (BOARD_ALIGNMENT_MODE==1 ? 1u : 5u) : 0u) : (BOARD_SCAN_DIRECTION==1 ? point : (6u-point)%6u);
+        for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[index][c]); }
+        int position=(BOARD_ALIGNMENT_MODE ? -BOARD_ALIGNMENT_MODE : BOARD_SCAN_DIRECTION)*(int)point*390;
+        fixed_count=(uint16_t)(position & 16383);
+        for (unsigned ms=0u;ms<200u;++ms) {
+            now_us+=1000u;pwm_tim1.CNT.value=1000u;sample();
+        }
+        CHECK(motor_runtime_read_scan(&log,&scan));
+        CHECK(scan.point[point].count==50u && scan.point[point].sum==position*50);
+        CHECK(scan.point[point].minimum==scan.point[point].maximum);
+        if (point<BOARD_SEQUENCE_POINTS-1u) {
+            CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+            CHECK(scan.step==point); /* 写预装不是已生效，必须等自然UEV确认。 */
+            now_us+=1999u;natural_update();TIM1_UP_IRQHandler(); /* 提交期限前1us仍可接受，总期限不后移。 */
+            CHECK(motor_runtime_read_scan(&log,&scan) && scan.step==point+1u);
+        }
+    }
+    check_closed();CHECK(scan.done==1u && scan.reason==1u && scan.mask==((1u<<BOARD_SEQUENCE_POINTS)-1u) && enables==1u);
+    CHECK(scan.ended_us-scan.started_us<BOARD_SEQUENCE_LIMIT_US);
+    const char request[]="P1C1,00000001,08,1B7E\r\n";
+    for (unsigned i=0u;i<23u;++i) { command_receive_byte((uint8_t)request[i],now_us); }
+    for (unsigned i=0u;i<250u;++i) { (void)command_poll(now_us); }
+    CHECK(std::strlen(scan_wire)==(BOARD_ALIGNMENT_MODE ? 183u : 248u));std::fputs(scan_wire,stdout);
+    auto start_scan=[]() {
+        still_ready();CHECK(motor_runtime_restart_zero());button_steps(false,512u);
+        button_steps(true,21u);button_steps(false,21u);open_window();
+        CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+    };
+    // 扫描RV-001：SSI在150ms前、ADC在150ms完成，不得算入稳定窗口；同时跨32位时标回绕。
+    reset(0xfff00000u);fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);button_steps(true,21u);button_steps(false,21u);open_window();
+    for (unsigned i=0u;i<149u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=15u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==0u);
+    fixed_count=0u;
+    for (unsigned i=0u;i<49u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=14u;pwm_tim1.CNT.value=1000u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==50u && scan.point[0].sum==14);
+    CHECK(scan.point[0].maximum==14 && (scan.mask & 1u)); /* SSI结束在200ms前、ADC到200ms才发布的最后帧保留。 */
+    motor_runtime_stop();check_closed();
+    start_scan();
+    for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+    now_us+=1028u;fixed_count=15u;pwm_tim1.CNT.value=1000u;sample(); /* SSI结束恰好200000us，排除。 */
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==49u && scan.point[0].sum==0);
+    motor_runtime_stop();check_closed();
+    // 整个最后50ms只有25帧，不得用延时或其他点补齐。
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
+    for (unsigned i=0u;i<25u;++i) { now_us+=2000u;sample(); }
+    check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==7u && !scan.done);
+    // 40帧边界可提交，64帧存储边界保持有效，第65帧必须中止。
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<40u;++i) { now_us+=1250u;sample(); }
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==40u && (scan.mask & 1u));
+    motor_runtime_stop();check_closed();
+    start_scan();
+    for (unsigned i=0u;i<150u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<64u;++i) { now_us+=100u;sample(); }
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==64u && !scan.reason);
+    now_us+=100u;sample();check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==8u);
+    start_scan();
+    for (unsigned i=0u;i<200u;++i) { now_us+=1000u;fixed_count=(i%2u) ? 8u : 16376u;sample(); }
+    check_closed();CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==7u);
+    start_scan();now_us+=1000u;fixed_count=3999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    now_us+=1000u;fixed_count=4000u;sample();check_closed();
+    CHECK(status().fault_flags==MOTOR_FAULT_EXPERIMENT);
+    // 绝对期限不会因为板级提交/前台停顿而延长；实际生产runtime负责撤销。
+    if (BOARD_ALIGNMENT_MODE) {
+        start_scan();motor_action_t action;motor_log_snapshot_t snapshot;
+        CHECK(motor_runtime_read_reply(&snapshot,&action));
+        now_us=action.requested_us+420000u;
+        motor_runtime_check_deadline(now_us);check_closed();
+        CHECK(motor_runtime_read_scan(&snapshot,&scan) && !scan.done);
+        // 同一启动的第二次手势不能再次开门。
+        button_steps(true,21u);button_steps(false,21u);CHECK(enables==1u);
+    }
+    // 点请求未生效，独立TIM3提交期限必须截止，即使ADC与前台都不再推进。
+    start_scan();
+    for (unsigned i=0u;i<200u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
+    timer_tick(2000u);check_closed();CHECK(status().fault_flags & MOTOR_FAULT_CALIBRATION);
+    // CCR写入与UEV/Break/排队STOP逐访问点交错：不能提交混合矢量，也不得再次开MOE。
+    start_scan();
+    for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;trace=true;access_count=0u;pwm_tim1.CNT.value=1000u;sample();trace=false;
+    unsigned update_points=access_count;CHECK(update_points>10u);
+    for (unsigned kind=1u;kind<=3u;++kind) {
+        for (unsigned at=1u;at<=update_points;++at) {
+            start_scan();
+            for (unsigned i=0u;i<199u;++i) { now_us+=1000u;sample(); }
+            now_us+=1000u;pwm_tim1.CNT.value=1000u;
+            trace=true;access_count=0u;inject_at=at;inject_kind=kind;sample();trace=false;
+            if (status().state==MOTOR_RUNTIME_ACTIVE && kind==1u) {
+                TIM1_UP_IRQHandler();
+                CHECK(motor_runtime_read_scan(&log,&scan));
+                if (scan.step==1u) {
+                    unsigned phase=BOARD_ALIGNMENT_MODE ? 0u : (BOARD_SCAN_DIRECTION==1 ? 1u : 5u);
+                    for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[phase][c]); }
+                } else {
+                    now_us+=100u;natural_update();TIM1_UP_IRQHandler();
+                    CHECK(motor_runtime_read_scan(&log,&scan) && scan.step==1u);
+                }
+                motor_runtime_stop();
+            }
+            if (kind == 2u) { TIM1_BRK_IRQHandler(); } /* 硬件已清MOE，服务待决Break IRQ后才检查引脚接管。 */
+            check_closed();CHECK(enables==1u);
+            natural_update();TIM1_UP_IRQHandler();TIM1_CC_IRQHandler();check_closed();
+        }
+    }
+    // 电流诊断越界立即撤销，参数未标校准；旧样本不能让长动作继续。
+    still_ready();CHECK(motor_runtime_restart_zero());
+    button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);open_window();
+    now_us+=1000u;sample(true,2283u,2028u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE); /* 256count等号 */
+    now_us+=1000u;sample(true,2284u,2028u);check_closed(); /* 257count */
+    CHECK(status().fault_flags==MOTOR_FAULT_CALIBRATION);
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
+    start_scan();now_us+=1000u;sample(true,2227u,2228u);check_closed(); /* 单路200count，但推算W为-400count。 */
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
+#if BOARD_ALIGNMENT_MODE
+    // 自动准备穿越设备时标回绕；启动按住PA12仍不能开门。
+    reset(0xfff00000u);fixed_angle=true;capture_flow=true;command_enable_local_flow();
+    automatic_steps(true,1100u);
+    CHECK(enables==0u && motor_runtime_zero_is_ready());
+    CHECK(count_flow("P1F1,READY_PRESS_PA12")==1u && count_flow("P1Z1,")==1u);
+    automatic_steps(true,200u);CHECK(count_flow("P1F1,READY_PRESS_PA12")==1u && enables==0u);
+    automatic_steps(false,21u);automatic_steps(true,21u);automatic_steps(false,21u);
+    open_window();CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+    fixed_count=(uint16_t)((BOARD_ALIGNMENT_MODE*390)&16383);automatic_steps(false,200u);
+    now_us+=100u;natural_update();TIM1_UP_IRQHandler();
+    fixed_count=0u;automatic_steps(false,200u);check_closed();automatic_steps(false,80u);
+    CHECK(count_flow("P1A2,00000000,08,")==1u && count_flow("P1F1,ACTION_DONE")==1u);
+    for (unsigned i=0u;i<flow_count;++i) { std::fputs(flow_lines[i],stdout); }
+    automatic_steps(true,21u);automatic_steps(false,21u);automatic_steps(false,100u);
+    CHECK(enables==1u && count_flow("P1A2,")==1u);
+    // 停止准备也不自动重开零偏；自动回执不占用用户命令序号。
+    reset();fixed_angle=true;capture_flow=true;command_enable_local_flow();
+    const char stop_request[]="P1C1,00000002,02,1A67\r\n";
+    for (unsigned i=0u;i<23u;++i) { command_receive_byte((uint8_t)stop_request[i],now_us); }
+    automatic_steps(false,1200u);
+    motor_zero_snapshot_t zero;CHECK(motor_runtime_read_zero(&log,&zero) && !(zero.flags & 16u));
+    CHECK(enables==0u && count_flow("P1F1,FAILED_STOP")==1u);
+    CHECK(count_flow("P1R2,00000002,02,00,")==1u);
+    // 准备中的传感器故障和一直移动都只能报告失败，不进行动作或重试。
+    reset();fixed_angle=true;capture_flow=true;command_enable_local_flow();automatic_steps(false,50u);
+    motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);automatic_steps(false,1200u);check_closed();
+    CHECK(enables==0u && count_flow("P1F1,FAILED_INPUT")==1u && count_flow("P1A2,")==0u);
+    reset();fixed_angle=true;capture_flow=true;command_enable_local_flow();automatic_steps(false,1200u,true);check_closed();
+    CHECK(enables==0u && count_flow("P1F1,FAILED_ZERO_INVALID")==1u);
+    reset();capture_flow=true;command_enable_local_flow();automatic_steps(false,3300u);check_closed();
+    CHECK(enables==0u && count_flow("P1F1,FAILED_NOT_STILL")==1u);
+    std::puts("PASS automatic alignment flow: no commands, held-at-boot no motion, zero/READY once, new PA12 only, unsolicited result once, STOP/fault/moving failure, no rearm, time wrap");
+#endif
+    std::puts(BOARD_ALIGNMENT_MODE ? "PASS production alignment: two applied points, preset side, 420ms bound, one gesture, SSI window and current/position/submit/Break/STOP checks; no hardware" : "PASS production scan: seven applied points, fixed direction, explicit zero, bounded statistics/current trip; no hardware");
 #else
     CHECK(motor_runtime_output_profile_count()==1u);
     CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());

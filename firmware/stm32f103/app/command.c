@@ -1,13 +1,15 @@
-/** 固定P1C1 23B / P1R2 95B；无printf、浮点、扫描或动态分配。
+/** 固定P1C1 23B / P1R2 95B / P1Z1 138B / P1V1 221B；无printf、浮点或动态分配。
  * RX状态仅在UART IRQ/短临界区修改；TX缓冲只由前台修改，TC前保持借用。 */
 #include "command.h"
 #include "board_io.h"
 #include "motor_runtime.h"
+#include "board_config.h"
 #include <stddef.h>
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
        REPLY_DENIED=4, REPLY_UART=5, REPLY_TIMEOUT=6, REPLY_SNAPSHOT=7 };
-enum { REQUEST_STATUS=1, REQUEST_STOP=2, REPLY_LOST=128 };
+enum { REQUEST_STATUS=1, REQUEST_STOP=2, REQUEST_ZERO_STATUS=5, REQUEST_ZERO_RESTART=6,
+       REQUEST_CURRENT_STATUS=7, REQUEST_SCAN_STATUS=8, REPLY_LOST=128 };
 typedef struct { uint32_t sequence; uint8_t code, result; } reply_event_t;
 static unsigned rx_index;
 static uint32_t rx_sequence, rx_started_us, rx_last_us, last_sequence;
@@ -16,13 +18,32 @@ static uint8_t rx_code;
 static bool rx_bad, rx_drop, have_sequence;
 static bool reply_pending;
 static reply_event_t pending_reply;
-static char reply_line[95];
+static char reply_line[248];
+static unsigned reply_length;
 static unsigned reply_index;
 static bool reply_building, reply_borrowed;
 static uint16_t reply_crc;
 static reply_event_t reply;
 static motor_log_snapshot_t reply_status;
 static motor_action_t reply_action;
+static motor_zero_snapshot_t reply_zero;
+static motor_current_snapshot_t reply_current;
+static motor_scan_snapshot_t reply_scan;
+static uint32_t scan_fields[43];
+static const uint8_t scan_widths[43]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,
+    2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4};
+static const uint8_t alignment_widths[28]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,
+    2,8,4,4,8,8,2,8,4,4,8,8};
+/* 前台自动流程只安排零偏和只读报告；唯一输出入口仍在runtime的PA12手势。 */
+enum { FLOW_OFF, FLOW_WAIT, FLOW_ZERO, FLOW_READY, FLOW_FAILED, FLOW_FINISHED };
+static unsigned flow_state, flow_notice;
+static unsigned version_report; /* 0未启用、1待发送、2本启动已发送。 */
+static volatile bool flow_enabled, flow_cancelled; /* UART IRQ取消与前台准备共用，重开事务另有短锁。 */
+static bool flow_zero_pending, flow_result_pending, flow_result_seen;
+static uint8_t flow_zero_result;
+static uint32_t flow_deadline_us, flow_last_us;
+static unsigned scan_field, scan_digits;
+static const uint8_t *sequence_widths; static unsigned sequence_fields;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -58,6 +79,9 @@ void command_init(void)
     uint32_t mask=board_enter_critical();
     reset_frame(); rx_drop=false; have_sequence=false; last_sequence=0u;
     reply_pending=false; reply_building=false; reply_borrowed=false; reply_index=0u;
+    version_report=0u;
+    flow_enabled=false; flow_state=FLOW_OFF; flow_notice=0u; flow_cancelled=false;
+    flow_zero_pending=false; flow_result_pending=false; flow_result_seen=false;
     board_leave_critical(mask);
 }
 
@@ -120,12 +144,17 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
         else if (rx_crc!=rx_received_crc) { result=REPLY_CRC; }
         else {
             /* STOP在完整CRC正确时先执行；即使序号重复/过期、邮箱满、TX忙也不能等待回执。 */
-            if (rx_code==REQUEST_STOP) { motor_runtime_stop(); }
+            if (rx_code==REQUEST_STOP) { motor_runtime_stop(); if (flow_enabled) { flow_cancelled=true; } }
             uint32_t advance=rx_sequence-last_sequence;
             if (have_sequence && (advance==0u || advance>=0x80000000u)) { result=REPLY_SEQUENCE; }
             else {
                 have_sequence=true; last_sequence=rx_sequence;
-                if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP) { result=REPLY_DENIED; }
+                if (rx_code==REQUEST_ZERO_RESTART) {
+                    if (!motor_runtime_restart_zero()) { result=REPLY_DENIED; }
+                } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS
+                           && rx_code!=(BOARD_SCAN_ENABLED ? REQUEST_SCAN_STATUS : REQUEST_CURRENT_STATUS)) {
+                    result=REPLY_DENIED;
+                }
             }
         }
         if (result!=REPLY_OK) { motor_runtime_communication_error(); }
@@ -147,6 +176,65 @@ static char hex_digit(uint32_t value, unsigned shift)
 /** 固定位置输出一字符；状态已经冻结，不在组帧过程中混读运行状态。 */
 static char reply_character(unsigned i)
 {
+    if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
+        const char *prefix=BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,";
+        if (i<5u) { return prefix[i]; }
+        if (i>=reply_length-6u && i<reply_length-2u) { return hex_digit(reply_crc,(reply_length-3u-i)*4u); }
+        if (i>=reply_length-2u) { return i==reply_length-2u ? '\r' : '\n'; }
+        if (!scan_digits) {
+            scan_field++;
+            if (scan_field<sequence_fields) { scan_digits=sequence_widths[scan_field]; }
+            return ',';
+        }
+        scan_digits--; return hex_digit(scan_fields[scan_field],scan_digits*4u);
+    }
+    if (reply.code==REQUEST_ZERO_STATUS || (reply.code==REQUEST_CURRENT_STATUS && !BOARD_SCAN_ENABLED)) {
+        const char *prefix=reply.code==REQUEST_ZERO_STATUS ? "P1Z1," : "P1V1,";
+        if (i<5u) { return prefix[i]; }
+        if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u
+            || i==54u || i==63u || i==72u || i==77u || i==82u || i==87u || i==92u
+            || i==95u || i==104u || i==113u || i==122u || i==131u) { return ','; }
+        if (i<=12u) { return hex_digit(reply.sequence,(12u-i)*4u); }
+        if (i<=15u) { return hex_digit(reply.code,(15u-i)*4u); }
+        if (i<=18u) { return hex_digit(reply.result,(18u-i)*4u); }
+        if (i<=21u) { return hex_digit((uint32_t)reply_status.state,(21u-i)*4u); }
+        if (i<=30u) { return hex_digit(reply_status.fault_flags,(30u-i)*4u); }
+        if (i<=39u) { return hex_digit(reply_status.sequence,(39u-i)*4u); }
+        if (i<=48u) { return hex_digit(reply_status.completed_us,(48u-i)*4u); }
+        if (i<=53u) { return hex_digit(reply_zero.offset.accepted_count,(53u-i)*4u); }
+        if (i<=62u) { return hex_digit(reply_zero.offset.sum_u_count,(62u-i)*4u); }
+        if (i<=71u) { return hex_digit(reply_zero.offset.sum_v_count,(71u-i)*4u); }
+        if (i<=76u) { return hex_digit(reply_zero.offset.minimum_u_count,(76u-i)*4u); }
+        if (i<=81u) { return hex_digit(reply_zero.offset.maximum_u_count,(81u-i)*4u); }
+        if (i<=86u) { return hex_digit(reply_zero.offset.minimum_v_count,(86u-i)*4u); }
+        if (i<=91u) { return hex_digit(reply_zero.offset.maximum_v_count,(91u-i)*4u); }
+        if (i<=94u) { return hex_digit(reply_zero.flags,(94u-i)*4u); }
+        if (i<=103u) { return hex_digit(reply_zero.scale_nA,(103u-i)*4u); }
+        if (i<=112u) { return hex_digit(reply_zero.began_us,(112u-i)*4u); }
+        if (i<=121u) { return hex_digit(reply_zero.ended_us,(121u-i)*4u); }
+        if (i<=130u) { return hex_digit(reply_zero.profile_id,(130u-i)*4u); }
+        if (reply.code==REQUEST_CURRENT_STATUS) {
+            if (i==136u || i==145u || i==154u || i==159u || i==164u || i==169u
+                || i==174u || i==183u || i==192u || i==197u || i==202u || i==205u || i==214u) { return ','; }
+            if (i<=135u) { return hex_digit(reply_current.samples.accepted_count,(135u-i)*4u); }
+            if (i<=144u) { return hex_digit(reply_current.samples.sum_u_count,(144u-i)*4u); }
+            if (i<=153u) { return hex_digit(reply_current.samples.sum_v_count,(153u-i)*4u); }
+            if (i<=158u) { return hex_digit(reply_current.samples.minimum_u_count,(158u-i)*4u); }
+            if (i<=163u) { return hex_digit(reply_current.samples.maximum_u_count,(163u-i)*4u); }
+            if (i<=168u) { return hex_digit(reply_current.samples.minimum_v_count,(168u-i)*4u); }
+            if (i<=173u) { return hex_digit(reply_current.samples.maximum_v_count,(173u-i)*4u); }
+            if (i<=182u) { return hex_digit(reply_current.began_us,(182u-i)*4u); }
+            if (i<=191u) { return hex_digit(reply_current.ended_us,(191u-i)*4u); }
+            if (i<=196u) { return hex_digit(reply_current.first_angle,(196u-i)*4u); }
+            if (i<=201u) { return hex_digit(reply_current.last_angle,(201u-i)*4u); }
+            if (i<=204u) { return hex_digit(reply_current.overflow,(204u-i)*4u); }
+            if (i<=213u) { return hex_digit(reply_current.action_id,(213u-i)*4u); }
+            if (i<=218u) { return hex_digit(reply_crc,(218u-i)*4u); }
+            return i==219u ? '\r' : '\n';
+        }
+        if (i<=135u) { return hex_digit(reply_crc,(135u-i)*4u); }
+        return i==136u ? '\r' : '\n';
+    }
     static const char prefix[]="P1R2,";
     if (i<5u) { return prefix[i]; }
     if (i<=12u) { return hex_digit(reply.sequence,(12u-i)*4u); }
@@ -166,8 +254,101 @@ static char reply_character(unsigned i)
     return i==93u ? '\r' : '\n';
 }
 
+void command_enable_version_report(void)
+{
+    if (version_report==0u) { version_report=1u; }
+}
+
+static bool report_version(void)
+{
+#if defined(MOTOR_GATE_TEST_PROFILES)
+#define FIRMWARE_MODE "GATE_TEST"
+#elif defined(MOTOR_LOCAL_PULSE_BASELINE)
+#define FIRMWARE_MODE "PULSE_V_TEST"
+#elif BOARD_ALIGNMENT_MODE == 1
+#define FIRMWARE_MODE "ALIGN_POS"
+#elif BOARD_ALIGNMENT_MODE == -1
+#define FIRMWARE_MODE "ALIGN_NEG"
+#elif BOARD_SCAN_DIRECTION == -1
+#define FIRMWARE_MODE "SCAN_NEG"
+#else
+#define FIRMWARE_MODE "SCAN_POS"
+#endif
+    static const char line[]="FW1," BOARD_FIRMWARE_VERSION "," FIRMWARE_MODE "\r\n";
+    if (version_report!=1u) { return false; }
+    if (board_serial_is_busy()) { return true; }
+    if (board_start_serial_write(line,sizeof(line)-1u)) { version_report=2u; }
+    return true;
+}
+
+void command_enable_local_flow(void)
+{
+    if (!BOARD_ALIGNMENT_MODE || flow_enabled) { return; }
+    flow_enabled=true; flow_state=FLOW_WAIT; flow_notice=1u;
+    flow_last_us=board_get_time_us(); flow_deadline_us=flow_last_us+3000000u;
+}
+
+static void local_flow_failed(unsigned notice, uint8_t result)
+{
+    flow_state=FLOW_FAILED; flow_notice=notice;
+    flow_zero_pending=true; flow_zero_result=result;
+}
+
+static void local_flow_poll(uint32_t now_us)
+{
+    if (!BOARD_ALIGNMENT_MODE || !flow_enabled || motor_runtime_output_is_busy() || now_us-flow_last_us<1000u) { return; }
+    flow_last_us=now_us;
+    motor_log_snapshot_t status; motor_action_t action;
+    if (!motor_runtime_read_reply(&status,&action)) { return; }
+    if (action.id) {
+        if (!flow_result_seen) {
+            flow_result_seen=true; flow_state=FLOW_FINISHED;
+            flow_result_pending=true;
+            flow_notice=(!status.fault_flags && action.reason==MOTOR_ACTION_DURATION) ? 8u : 9u;
+        }
+        return; /* 有动作后永不自动重开零偏，不返还手势。 */
+    }
+    if (flow_state==FLOW_FAILED || flow_state==FLOW_FINISHED) { return; }
+    if (flow_cancelled) { local_flow_failed(10u,REPLY_DENIED); return; }
+    if (status.fault_flags) { local_flow_failed(4u,REPLY_DENIED); return; }
+    if (flow_state==FLOW_WAIT) {
+        uint32_t mask=board_enter_critical();
+        bool restarted=!flow_cancelled && motor_runtime_restart_zero();
+        board_leave_critical(mask);
+        if (restarted) {
+            flow_state=FLOW_ZERO; flow_notice=2u; flow_deadline_us=now_us+1000000u;
+        } else if ((int32_t)(now_us-flow_deadline_us)>=0) { local_flow_failed(5u,REPLY_TIMEOUT); }
+    } else if (flow_state==FLOW_ZERO) {
+        motor_zero_snapshot_t zero;
+        if (!motor_runtime_read_zero(&status,&zero)) { local_flow_failed(4u,REPLY_SNAPSHOT); return; }
+        if ((zero.flags & 2u) || zero.offset.accepted_count==512u) {
+            if (motor_runtime_zero_is_ready()) {
+                flow_state=FLOW_READY; flow_notice=3u; flow_zero_pending=true; flow_zero_result=REPLY_OK;
+            } else { local_flow_failed(6u,REPLY_DENIED); }
+        } else if ((int32_t)(now_us-flow_deadline_us)>=0) { local_flow_failed(7u,REPLY_TIMEOUT); }
+    } else if (flow_state==FLOW_READY && !motor_runtime_zero_is_ready()) {
+        local_flow_failed(6u,REPLY_DENIED);
+    }
+}
+
+static bool local_flow_notice(void)
+{
+    /* 提示仅辅助阅读，CRC保护的P1Z1/P1A2才承载数据；无通用格式化。 */
+    static const char *const lines[]={"", "P1F1,WAIT_STILL\r\n", "P1F1,COLLECT_ZERO\r\n",
+        "P1F1,READY_PRESS_PA12\r\n", "P1F1,FAILED_INPUT\r\n", "P1F1,FAILED_NOT_STILL\r\n",
+        "P1F1,FAILED_ZERO_INVALID\r\n", "P1F1,FAILED_ZERO_TIMEOUT\r\n",
+        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n"};
+    if (!flow_enabled || !flow_notice) { return false; }
+    if (board_serial_is_busy()) { return true; }
+    const char *line=lines[flow_notice]; uint32_t length=0u;
+    while (line[length]) { ++length; }
+    if (board_start_serial_write(line,length)) { flow_notice=0u; }
+    return true;
+}
+
 bool command_poll(uint32_t now_us)
 {
+    local_flow_poll(now_us);
     uint32_t mask=board_enter_critical();
     expire_frame(now_us);
     board_leave_critical(mask);
@@ -179,10 +360,52 @@ bool command_poll(uint32_t now_us)
         mask=board_enter_critical();
         bool pending=reply_pending;
         if (pending) { reply=pending_reply; reply_pending=false; }
+        else if (flow_zero_pending) {
+            reply=(reply_event_t){0u,REQUEST_ZERO_STATUS,flow_zero_result}; flow_zero_pending=false; pending=true;
+        } else if (flow_result_pending) {
+            reply=(reply_event_t){0u,REQUEST_SCAN_STATUS,REPLY_OK}; flow_result_pending=false; pending=true;
+        }
         board_leave_critical(mask);
-        if (!pending) { return false; }
+        if (!pending) { return report_version() || local_flow_notice(); }
         if (!motor_runtime_read_reply(&reply_status,&reply_action)) {
             motor_log_snapshot_t empty={0}; motor_action_t no_action={0}; reply_status=empty; reply_action=no_action; reply.result=REPLY_SNAPSHOT;
+        }
+        reply_length=95u;
+        if (reply.code==REQUEST_ZERO_STATUS) {
+            reply_length=138u;
+            if (!motor_runtime_read_zero(&reply_status,&reply_zero)) { reply.result=REPLY_SNAPSHOT; }
+        } else if (reply.code==REQUEST_CURRENT_STATUS && !BOARD_SCAN_ENABLED) {
+            reply_length=221u;
+            if (!motor_runtime_read_current(&reply_status,&reply_zero,&reply_current)) { reply.result=REPLY_SNAPSHOT; }
+        } else if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
+            reply_length=BOARD_ALIGNMENT_MODE ? 183u : sizeof(reply_line);
+            if (!motor_runtime_read_scan(&reply_status,&reply_scan)) { reply.result=REPLY_SNAPSHOT; }
+            uint32_t header[15]={reply.sequence,reply.code,reply.result,(uint32_t)reply_status.state,
+                reply_status.fault_flags,reply_scan.action_id,(uint8_t)reply_scan.direction,reply_scan.step,
+                reply_scan.done,reply_scan.reason,reply_scan.mask,reply_scan.origin,reply_scan.started_us,
+                reply_scan.ended_us,BOARD_ALIGNMENT_MODE ? 0x00020001u : 0x00010001u};
+            for (unsigned j=0u;j<15u;++j) { scan_fields[j]=header[j]; }
+            for (unsigned j=0u;j<7u;++j) {
+                scan_fields[15u+4u*j]=reply_scan.point[j].count;
+                scan_fields[16u+4u*j]=(uint32_t)reply_scan.point[j].sum;
+                scan_fields[17u+4u*j]=(uint16_t)reply_scan.point[j].minimum;
+                scan_fields[18u+4u*j]=(uint16_t)reply_scan.point[j].maximum;
+            }
+            sequence_widths=scan_widths; sequence_fields=43u;
+            if (BOARD_ALIGNMENT_MODE) {
+                sequence_widths=alignment_widths; sequence_fields=28u;
+                scan_fields[15]=reply_action.requested_us;
+                for (unsigned j=0u;j<2u;++j) {
+                    unsigned k=16u+6u*j;
+                    scan_fields[k]=reply_scan.point[j].count;
+                    scan_fields[k+1u]=(uint32_t)reply_scan.point[j].sum;
+                    scan_fields[k+2u]=(uint16_t)reply_scan.point[j].minimum;
+                    scan_fields[k+3u]=(uint16_t)reply_scan.point[j].maximum;
+                    scan_fields[k+4u]=reply_scan.point[j].started_us;
+                    scan_fields[k+5u]=reply_scan.point[j].ended_us;
+                }
+            }
+            scan_field=0u; scan_digits=sequence_widths[0];
         }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;
@@ -190,11 +413,11 @@ bool command_poll(uint32_t now_us)
     if (board_serial_is_busy()) { return true; }
     char byte=reply_character(reply_index);
     reply_line[reply_index]=byte;
-    if (reply_index<89u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
+    if (reply_index<reply_length-6u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
     reply_index++;
-    if (reply_index==sizeof(reply_line)) {
+    if (reply_index==reply_length) {
         reply_building=false;
-        reply_borrowed=board_start_serial_write(reply_line,sizeof(reply_line));
+        reply_borrowed=board_start_serial_write(reply_line,reply_length);
     }
     return true;
 }

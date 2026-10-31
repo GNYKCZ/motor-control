@@ -148,6 +148,18 @@ def main():
     cli = subprocess.run([sys.executable, "-B", str(root / "tools/session_probe.py"),
                           "--status-seq", "1", "--stop-seq", "2"], capture_output=True, timeout=10)
     assert cli.returncode == 2  # argparse在任何serial导入/打开之前拒绝互斥参数。
+    for command, argument, code in (("zero-status", "zero_status_seq", "05"), ("zero-restart", "zero_restart_seq", "06")):
+        port = FakePort([])
+        output = Path(tempfile.mkdtemp(prefix=command + "_", dir=dest)) / "capture"
+        capture_session(port, output, {"source_kind": "synthetic"}, clock=port.clock, **{argument: 3})
+        assert len(port.writes) == 1
+        frame = port.writes[0][1]
+        prefix = f"P1C1,00000003,{code},".encode()
+        import binascii
+        assert frame == prefix + f"{binascii.crc_hqx(prefix, 0xFFFF):04X}\r\n".encode()
+        summary = json.loads((output / "session_result.json").read_text())
+        assert summary["requested_command"] == command and summary["requested_sequence"] == 3
+        assert not summary["status_requested"] and not summary["stop_requested"]
     (dest / "evidence.json").write_text(json.dumps({"result": "PASS", "cases": results,
         "source_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in
          ["tools/session_probe.py", "tools/command_link.py", "tools/sensor_capture.py", "tests/m1/test_session_probe.py"]},

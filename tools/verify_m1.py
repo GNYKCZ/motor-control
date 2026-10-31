@@ -24,6 +24,10 @@ def main():
     """检查实际存在、路径闭合、原字节哈希和文档链接，不读取参考目录/工具安装资料。"""
     root = Path(__file__).resolve().parents[1]
     firmware = root / "firmware/stm32f103"
+    config=(firmware / "board/board_config.h").read_text(encoding="utf-8")
+    version=re.search(r'#define BOARD_FIRMWARE_VERSION "([0-9]{2}-[0-9]{2}-[0-9]{2})"',config)
+    require(version is not None,"missing firmware version")
+    require("Firmware version: "+version[1]+" |" in (firmware / "Core/Src/main.c").read_text(encoding="utf-8"),"main.c firmware version differs from serial version")
     project = json.loads((firmware / "project_sources.json").read_text(encoding="utf-8"))
     shared_files = {root / "control_core" / (name + suffix)
                     for name in ("sensor_input", "feedback") for suffix in (".c", ".h")}
@@ -124,6 +128,11 @@ def main():
     own_paths += [root / name for name in ("tools/command_link.py", "tools/test_command.py",
                   "tests/m1/test_command.c", "tests/m1/uart_stub/usart.h", "docs/p1a1_command_link.md",
                   "tests/m1/test_uart_tc_race.cpp", "tests/m1/uart_model/usart.h", "tests/m1/uart_model/linkage.h")]
+    own_paths += [root / name for name in ("docs/current_angle_calibration.md", "tools/zero_offset_report.py",
+                  "tools/session_probe.py", "tests/m1/test_session_probe.py",
+                  "tests/m1/test_zero_offset_report.py", "tests/m1/test_calibration_timing.py")]
+    own_paths += [root / name for name in ("docs/commutation_scan_design.md", "tools/commutation_report.py", "tests/m1/test_commutation_report.py")]
+    own_paths += [root / name for name in ("docs/electrical_zero_alignment_design.md", "tools/alignment_report.py", "tests/m1/test_alignment_report.py")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -143,6 +152,9 @@ def main():
                  root / "docs/m2c_sampling_check.md", root / "docs/m3b_feedback_integration.md", root / "docs/m3b_timing_check.md", root / "docs/m3b3_compact_log.md", firmware / "README.md", firmware / "SOURCES.md"]
     documents += [root / "docs/p1a1_command_link.md"]
     documents += [root / "docs/p1a2a_pwm_preparation.md", root / "docs/first_local_output.md", root / "docs/first_local_output_test20.md"]
+    documents += [root / "docs/current_angle_calibration.md"]
+    documents += [root / "docs/commutation_scan_design.md"]
+    documents += [root / "docs/electrical_zero_alignment_design.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

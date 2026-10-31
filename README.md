@@ -5,8 +5,11 @@
 ## 工程范围
 
 工程、源码、测试及学习笔记都放在本仓库目录内。[STM32F103 M1](firmware/stm32f103/README.md)历史基线只采样。
-当前[首次按键受限动作](docs/first_local_output_test20.md)加入每次启动一次的本地按键profile；串口ARM/PULSE仍拒绝、Reset不自动激励。
-本批尚未实机验收，未经用户明确安排不下载或操作电机；停止调制不代表功率桥高阻。
+历史[首次按键受限动作](docs/first_local_output_test20.md)加入每次启动一次的本地按键profile；串口ARM/PULSE仍拒绝、Reset不自动激励。
+用户已接受首次受控激励、轻微机械响应及位移保护撤销的阶段结果；停止调制不代表功率桥高阻。
+当前推进[电流与换相标定](docs/current_angle_calibration.md)：先调整采样相位并读出完整零偏候选，
+当前已按用户批准的每方向最多1.42秒实现[七点换相扫描](docs/commutation_scan_design.md)，
+M3B3每5秒一次，扫描实际运行另行确认，整个标定工作包尚未完成。
 软件构建/测试与板端验证分别记录；M2c固件已烧录并取得有限板端采样观察，尚无可运行的关节仿真模型。
 
 M2a 新增 [纯 FOC 数学模块与来源/验收契约](docs/m2a_foc_contract.md)：只在主机测试中验证

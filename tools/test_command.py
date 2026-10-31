@@ -54,7 +54,7 @@ def main():
         sequences = [0, 1, 2, 3, 0xFFFFFFFE, 0xFFFFFFFF, 0x80000002]
         rows = []
         for seq in sequences:
-            for code in [1, 2, 3, 4, 0x55]:
+            for code in [1, 2, 3, 4, 5, 6, 7, 8, 0x55]:
                 prefix = f"P1C1,{seq:08X},{code:02X},".encode("ascii")
                 frame = prefix + f"{binascii.crc_hqx(prefix, 0xFFFF):04X}\r\n".encode("ascii")
                 rows.append(f"{{{seq}u,{code}u,{json.dumps(frame.decode('ascii'))}}}")
@@ -64,8 +64,45 @@ def main():
         command = [gcc, "-std=c11", "-D__USE_MINGW_ANSI_STDIO=1", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic"]
         for directory in [root / "tests/m1/uart_stub", output, fw / "board", fw / "app", root / "control_core"]:
             command += ["-I", directory]
-        run(command + sources + ["-lm", "-o", output / "test_command.exe"])
-        text = run([output / "test_command.exe"])
+        run(command + ["-DBOARD_ALIGNMENT_MODE=0"] + sources + ["-lm", "-o", output / "test_command.exe"])
+        target_text = run([output / "test_command.exe"])
+        scan_actual=next((line+"\r\n").encode() for line in target_text.splitlines() if line.startswith("P1A1,"))
+        scan_prefix=("P1A1,00000001,08,00,01,00000000,00000000,01,00,00,00,00,0000,00000000,00000000,00010001,"+"00,00000000,0000,0000,"*7).encode()
+        scan_golden=scan_prefix+f"{binascii.crc_hqx(scan_prefix,0xffff):04X}\r\n".encode()
+        if scan_actual!=scan_golden or parse_line(scan_actual)["done"]:
+            raise RuntimeError("P1A1 target 248B independent cold snapshot mismatch")
+        alignment_goldens=[]
+        for side in (-1,1):
+            exe=output/("alignment_"+str(side)+".exe")
+            run(command+["-DBOARD_ALIGNMENT_MODE="+str(side),*sources,"-lm","-o",exe])
+            text=run([exe])
+            actual=next((line+"\r\n").encode() for line in text.splitlines() if line.startswith("P1A2,"))
+            prefix=("P1A2,00000001,08,00,01,00000000,00000000,"+("01" if side==1 else "FF")+
+                    ",00,00,00,00,0000,00000000,00000000,00020001,00000000,"+
+                    "00,00000000,0000,0000,00000000,00000000,"*2).encode()
+            golden=prefix+f"{binascii.crc_hqx(prefix,0xffff):04X}\r\n".encode()
+            if len(actual)!=183 or actual!=golden or parse_line(actual)["done"]:
+                raise RuntimeError("P1A2 independent cold snapshot golden mismatch")
+            for i in range(183):
+                for bit in range(8):
+                    bad=bytearray(actual);bad[i]^=1<<bit
+                    try: parse_line(bytes(bad))
+                    except ValueError: pass
+                    else: raise RuntimeError("P1A2 accepted single-bit corruption")
+            alignment_goldens.append(actual.decode())
+        evidence["alignment_uart"]={"goldens":alignment_goldens,"bytes":183,"rejected_single_bits":2928}
+        for i in range(248):
+            for bit in range(8):
+                corrupted=bytearray(scan_actual);corrupted[i]^=1<<bit
+                try:
+                    parse_line(bytes(corrupted))
+                except ValueError:
+                    pass
+                else:
+                    raise RuntimeError("P1A1 accepted single-bit corruption")
+        # 显式host-only旧短脉冲配置保留历史221B/STOP回归，不能替代上面的生产扫描构建。
+        run(command+["-DMOTOR_LOCAL_PULSE_BASELINE",*sources,"-lm","-o",output/"test_command_baseline.exe"])
+        text=run([output/"test_command_baseline.exe"])
         # RV-001：同一生产ISR用C++寄存器语义模型编译，注入SR读写间硬件到达；不改生产源码。
         model = root / "tests/m1/uart_model"
         model_objects = []
@@ -83,7 +120,7 @@ def main():
         run(cpp + ["-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_uart.c", "-o", irq_object])
         run(cpp + [root / "tests/m1/test_uart_tc_race.cpp", irq_object, *model_objects, "-lm", "-o", output / "test_uart_tc_race.exe"])
         run([output / "test_uart_tc_race.exe"])
-        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R2,", "M3B3,")))
+        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R2,", "P1Z1,", "P1V1,", "M3B3,")))+scan_actual
         records = [parse_line(line + b"\n") for line in stream.split(b"\n") if line]
         replies = [r for r in records if r["format"] == "P1R2"]
         if not replies or any(replies[0][key] != value for key, value in {"q": 1, "c": 1, "r": 0, "s": 1, "f": 0, "n": 25, "t": 2500}.items()):
@@ -110,12 +147,40 @@ def main():
         golden = b"P1R2,00000001,01,00,01,00000000,00000019,000009C4,00000000,00000000,00000000,00000000,00,6B79\r\n"
         if replies[0] != parse_line(golden) or len(reply) != 95 or rejected != 760:
             raise RuntimeError("P1R2 independent golden/length/single-bit oracle mismatch")
+        zero_golden = b"P1Z1,00000001,05,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,1DDD\r\n"
+        zero_actual = next(line + b"\n" for line in stream.split(b"\n") if line.startswith(b"P1Z1,"))
+        if zero_actual != zero_golden or parse_line(zero_actual)["cn"] != 1:
+            raise RuntimeError("P1Z1 independent 138B golden mismatch")
+        for i in range(138):
+            for bit in range(8):
+                corrupted = bytearray(zero_actual); corrupted[i] ^= 1 << bit
+                try:
+                    parse_line(bytes(corrupted))
+                except ValueError:
+                    pass
+                else:
+                    raise RuntimeError("P1Z1 accepted one-bit corruption")
+        current_prefix = b"P1V1,00000001,07,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,0000,00000000,00000000,0000,0000,0000,0000,00000000,00000000,0000,0000,00,00000000,"
+        current_golden = current_prefix + f"{binascii.crc_hqx(current_prefix,0xFFFF):04X}\r\n".encode()
+        current_actual = next(line+b"\n" for line in stream.split(b"\n") if line.startswith(b"P1V1,"))
+        if current_actual != current_golden or parse_line(current_actual)["ic"] != 0:
+            raise RuntimeError("P1V1 independent 221B empty capture mismatch")
+        for i in range(221):
+            for bit in range(8):
+                corrupted = bytearray(current_actual); corrupted[i] ^= 1 << bit
+                try:
+                    parse_line(bytes(corrupted))
+                except ValueError:
+                    pass
+                else:
+                    raise RuntimeError("P1V1 accepted one-bit corruption")
         zero_prefix = b"P1R2,00000002,01,00,01,00000000,00000001,00000000,00000001,FFFFFF00,00000000,00000000,C4,"
         zero_frame = zero_prefix + f"{binascii.crc_hqx(zero_prefix,0xFFFF):04X}\r\n".encode()
         zero = parse_line(zero_frame)
         if zero["start"] != 0 or zero["why"] != 0xC4:
             raise RuntimeError("wrapped zero timestamp lost validity")
         evidence.update(result="PASS", mixed_records=len(records), rejected_single_bits=rejected,
+                        scan_reply_bytes=248,scan_rejected_single_bits=1984,
                         request_bytes=23, reply_bytes=95, oracle="explicit golden strings; CRC-CCITT check 123456789=29B1; Python crc_hqx")
         evidence["RV-001"] = "PASS: actual ISR with W0C/RMW-arrival model, 23 STOP-byte overlaps, no SR write, TC retention/next-TX clear"
         print("PASS P1a-1 real runtime -> UART -> command -> reply -> capture, errors/priority/backpressure; no hardware")

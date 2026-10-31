@@ -171,6 +171,7 @@ static void poll_fresh_feedback(void)
 /** 常规导出测试驱动多次前台迭代；专门的分步测试直接调用真实poll。 */
 static void send_telemetry(uint32_t now_ms)
 {
+    now_ms *= 50u; /* 导出工况映射到5秒周期，保持uint32回绕；ADC时间不改。 */
     telemetry_poll_status(now_ms);
     if (serial_busy) { return; }
     for (unsigned i = 0u; i < 16u && !serial_busy; ++i) { telemetry_poll_status(now_ms); }
@@ -589,7 +590,7 @@ static void test_telemetry_scheduling(void)
             motor_runtime_handle_sample(&sample);
         }
         poll_fresh_feedback();
-        telemetry_poll_status(100000u);
+        telemetry_poll_status(5000000u);
         assert(serial_busy == (part == 16u)); /* 一次poll不能吞掉后续格式步骤。 */
         assert(read_status().state == MOTOR_RUNTIME_DISABLED && !read_status().feedback_overruns);
     }
@@ -603,18 +604,18 @@ static void test_telemetry_scheduling(void)
         sequence++;
         motor_sample_t sample = make_sample(sequence, sequence * 100u);
         motor_runtime_handle_sample(&sample); poll_fresh_feedback();
-        telemetry_poll_status(100100u);
+        telemetry_poll_status(5005000u);
         assert(strcmp(held, borrowed_line) == 0);
         assert(read_status().state == MOTOR_RUNTIME_DISABLED);
     }
     /* 组装中途原始帧失败：本行保持旧快照，下一行明确记录新故障及保留诊断。 */
     serial_busy = false;
-    telemetry_poll_status(100200u);
+    telemetry_poll_status(5010000u);
     sequence++;
     motor_sample_t bad = make_sample(sequence, sequence * 100u); bad.is_valid = false;
     motor_runtime_handle_sample(&bad);
     assert(read_status().state == MOTOR_RUNTIME_FAULT);
-    for (unsigned part = 1u; part < 17u; ++part) { telemetry_poll_status(100200u); }
+    for (unsigned part = 1u; part < 17u; ++part) { telemetry_poll_status(5010000u); }
     assert(serial_busy && strstr(captured_line, "M3B3,s=1,f=0,") == captured_line);
     serial_busy = false; send_telemetry(100300u);
     assert(strstr(captured_line, "M3B3,s=2,") == captured_line);

@@ -26,7 +26,8 @@ typedef enum {
     MOTOR_FAULT_EXPERIMENT = 32u, /**< 本次固定实验累计位移达到46count，非物理最大转角保证。 */
     MOTOR_FAULT_START_WINDOW = 64u, /**< 启动事务共同低窗检查拒绝；同时保留DEVICE位。 */
     MOTOR_FAULT_START_INPUT = 128u, /**< 最终代次/输入/资格检查拒绝；同时保留DEVICE位。 */
-    MOTOR_FAULT_START_TIME = 256u /**< 最终开门前期限检查拒绝；同时保留DEVICE位。 */
+    MOTOR_FAULT_START_TIME = 256u, /**< 最终开门前期限检查拒绝；同时保留DEVICE位。 */
+    MOTOR_FAULT_CALIBRATION = 512u /**< 扫描提交/稳定/电流诊断/总期限失败；不自动恢复。 */
 } motor_fault_t;
 
 typedef struct {
@@ -76,7 +77,7 @@ void motor_runtime_finish_boot(bool devices_are_ready);
  * 不调用串口，不保存指针；故障后仍可记录样本但不自动退出 FAULT。 */
 void motor_runtime_handle_sample(const motor_sample_t *sample);
 /** 前台检查采样是否失联；now_us 必须取设备 1 MHz 时间。
- * 启动超过 1 ms 无有效帧、已有有效帧后超过 300 us 无新包，锁存采样故障。
+ * 测试配置启动超过10ms无有效帧、已有有效帧后超过3000us无新包，锁存采样故障。
  * 短临界区内只比较整数；BOOT 阶段不检查；故障不自动清除。 */
 void motor_runtime_check_deadline(uint32_t now_us);
 /** 仅前台调用：短临界区取单槽邮箱，在临界区外计算double反馈，再原子发布。
@@ -106,6 +107,28 @@ typedef struct { uint32_t id, requested_us, started_us, ended_us; motor_action_r
 } motor_action_t;
 /** 同一短锁同时冻结旧状态与最近一次动作槽，供P1R2回执；不格式化、不提供可写内部指针。 */
 bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action);
+/** 完整512帧零偏候选的只读快照；不自动应用或标为已校准。 */
+typedef struct { sensor_offset_t offset; uint32_t began_us, ended_us, profile_id, scale_nA;
+    uint8_t flags; /**< bit0满批、bit1中止、bit2静止辅助、bit3名义增益、bit4显式重开批次。 */
+} motor_zero_snapshot_t;
+bool motor_runtime_read_zero(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero);
+/** 固定V矢量输出期间的有界原始统计；只用于诊断，不应用零偏、不作为闭环/峰值保护。 */
+typedef struct { sensor_offset_t samples; uint32_t began_us, ended_us, action_id;
+    uint16_t first_angle, last_angle; uint8_t overflow; } motor_current_snapshot_t;
+/** 与零偏/运行态在同一短锁冻结；输出开始前/关闭后的样本不加入统计。 */
+bool motor_runtime_read_current(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero,
+                                motor_current_snapshot_t *current);
+typedef struct { uint32_t started_us, ended_us; int32_t sum; int16_t minimum, maximum; uint8_t count; } motor_scan_point_t;
+typedef struct { motor_scan_point_t point[7]; uint32_t action_id, started_us, ended_us;
+    uint16_t origin; int8_t direction; uint8_t step, done, reason, mask; } motor_scan_snapshot_t;
+/** 只读扫描候选，未包含p/d/z判定或参数应用。 */
+bool motor_runtime_read_scan(motor_log_snapshot_t *status, motor_scan_snapshot_t *scan);
+/** board已持锁、自然UEV后确认本次点；请求点不等于已施加点。 */
+bool motor_runtime_commit_scan_point(uint32_t generation, unsigned step, uint32_t now_us);
+/** 仅DISABLED/无故障/新鲜静止/尚无动作时重开候选批，不改变输出资格。 */
+bool motor_runtime_restart_zero(void);
+/** 前台只读资格；与PA12启动使用同一完整零偏/静止/新鲜度/无故障门槛。 */
+bool motor_runtime_zero_is_ready(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */
