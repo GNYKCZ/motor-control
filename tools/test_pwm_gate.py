@@ -48,11 +48,12 @@ def main():
         includes = [flag for directory in (model, fw / "board", fw / "app", root / "control_core") for flag in ("-I", directory)]
         flags = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic", *includes]
         scan_reports=[]
-        for tag in ("production", "scan_forward", "scan_reverse", "synthetic"):
+        for tag in ("production", "scan_forward", "scan_reverse", "align_positive", "align_negative", "synthetic"):
             synthetic = tag=="synthetic"
             define = (["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else
                       ["-DMOTOR_LOCAL_PULSE_BASELINE"] if tag=="production" else
-                      ["-DBOARD_SCAN_DIRECTION=-1"] if tag=="scan_reverse" else [])
+                      ["-DBOARD_SCAN_DIRECTION=-1"] if tag=="scan_reverse" else
+                      ["-DBOARD_ALIGNMENT_MODE="+str(1 if tag=="align_positive" else -1)] if tag.startswith("align_") else [])
             objects = []
             for source in c_sources:
                 obj = output / (tag + "_" + source.stem + ".o")
@@ -70,6 +71,12 @@ def main():
                 if scan["done"]!=1 or scan["mask"]!=127 or scan["direction"]!=(-1 if tag.endswith("reverse") else 1):
                     raise RuntimeError("production scan snapshot does not match completed model")
                 scan_reports.append(analyze(scan))
+            if tag.startswith("align_"):
+                frame=next((line+"\r\n").encode() for line in target_text.splitlines() if line.startswith("P1A2,"))
+                record=parse_line(frame)
+                if not record["done"] or record["mask"]!=3 or record["direction"]!=(1 if tag.endswith("positive") else -1):
+                    raise RuntimeError("alignment mode/frame mismatch")
+                evidence[tag]=record
             if tag=="scan_forward":
                 old_window=output/"scan_window_old.c"
                 old_window.write_bytes(subprocess.check_output(["git","show",

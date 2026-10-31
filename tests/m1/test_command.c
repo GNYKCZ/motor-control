@@ -1,6 +1,7 @@
 /** 真实runtime/command/board_uart/telemetry集成；替换寄存器/时钟，不操作板卡。
  * 命令向量由Python独立crc_hqx生成，另有明写黄金字节，不用生产CRC当expected。 */
 #include "command.h"
+#include "board_config.h"
 #include "motor_runtime.h"
 #include "board_io.h"
 #include "telemetry.h"
@@ -227,8 +228,8 @@ int main(void)
     CHECK(strncmp(wire,"P1V1,",5u)==0);fputs(wire,stdout);
 #else
     start();before=disables;feed(vector(1u,8u));reply_done();
-    CHECK(wire_length==248u && result()==0u && disables==before && !fake_pwm);
-    CHECK(strncmp(wire,"P1A1,",5u)==0);fputs(wire,stdout);
+    CHECK(wire_length==(BOARD_ALIGNMENT_MODE ? 183u : 248u) && result()==0u && disables==before && !fake_pwm);
+    CHECK(strncmp(wire,BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,",5u)==0);fputs(wire,stdout);
 #endif
     return 0;
 }

@@ -65,6 +65,10 @@ void pwm_model_written(unsigned id, uint32_t value)
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
 #elif defined(MOTOR_LOCAL_PULSE_BASELINE)
         if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#elif BOARD_ALIGNMENT_MODE == 1
+        if (active_ticks[0]!=60u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#elif BOARD_ALIGNMENT_MODE == -1
+        if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=60u
 #else
         if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #endif
@@ -315,29 +319,30 @@ int main()
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
     const unsigned oracle[7][3]={{60,0,0},{60,60,0},{0,60,0},{0,60,60},{0,0,60},{60,0,60},{60,0,0}};
     motor_log_snapshot_t log;motor_scan_snapshot_t scan;
-    for (unsigned point=0u;point<7u;++point) {
-        unsigned index=BOARD_SCAN_DIRECTION==1 ? point : (6u-point)%6u;
+    for (unsigned point=0u;point<BOARD_SEQUENCE_POINTS;++point) {
+        unsigned index=BOARD_ALIGNMENT_MODE ? (point==0u ? (BOARD_ALIGNMENT_MODE==1 ? 1u : 5u) : 0u) : (BOARD_SCAN_DIRECTION==1 ? point : (6u-point)%6u);
         for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[index][c]); }
-        fixed_count=(uint16_t)((BOARD_SCAN_DIRECTION*(int)point*390)&16383);
+        int position=(BOARD_ALIGNMENT_MODE ? -BOARD_ALIGNMENT_MODE : BOARD_SCAN_DIRECTION)*(int)point*390;
+        fixed_count=(uint16_t)(position & 16383);
         for (unsigned ms=0u;ms<200u;++ms) {
             now_us+=1000u;pwm_tim1.CNT.value=1000u;sample();
         }
         CHECK(motor_runtime_read_scan(&log,&scan));
-        CHECK(scan.point[point].count==50u && scan.point[point].sum==BOARD_SCAN_DIRECTION*(int)point*390*50);
+        CHECK(scan.point[point].count==50u && scan.point[point].sum==position*50);
         CHECK(scan.point[point].minimum==scan.point[point].maximum);
-        if (point<6u) {
+        if (point<BOARD_SEQUENCE_POINTS-1u) {
             CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
             CHECK(scan.step==point); /* 写预装不是已生效，必须等自然UEV确认。 */
             now_us+=1999u;natural_update();TIM1_UP_IRQHandler(); /* 提交期限前1us仍可接受，总期限不后移。 */
             CHECK(motor_runtime_read_scan(&log,&scan) && scan.step==point+1u);
         }
     }
-    check_closed();CHECK(scan.done==1u && scan.reason==1u && scan.mask==127u && enables==1u);
-    CHECK(scan.ended_us-scan.started_us<1420000u);
+    check_closed();CHECK(scan.done==1u && scan.reason==1u && scan.mask==((1u<<BOARD_SEQUENCE_POINTS)-1u) && enables==1u);
+    CHECK(scan.ended_us-scan.started_us<BOARD_SEQUENCE_LIMIT_US);
     const char request[]="P1C1,00000001,08,1B7E\r\n";
     for (unsigned i=0u;i<23u;++i) { command_receive_byte((uint8_t)request[i],now_us); }
     for (unsigned i=0u;i<250u;++i) { (void)command_poll(now_us); }
-    CHECK(std::strlen(scan_wire)==248u);std::fputs(scan_wire,stdout);
+    CHECK(std::strlen(scan_wire)==(BOARD_ALIGNMENT_MODE ? 183u : 248u));std::fputs(scan_wire,stdout);
     auto start_scan=[]() {
         still_ready();CHECK(motor_runtime_restart_zero());button_steps(false,512u);
         button_steps(true,21u);button_steps(false,21u);open_window();
@@ -382,6 +387,16 @@ int main()
     start_scan();now_us+=1000u;fixed_count=3999u;sample();CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
     now_us+=1000u;fixed_count=4000u;sample();check_closed();
     CHECK(status().fault_flags==MOTOR_FAULT_EXPERIMENT);
+    // 绝对期限不会因为板级提交/前台停顿而延长；实际生产runtime负责撤销。
+    if (BOARD_ALIGNMENT_MODE) {
+        start_scan();motor_action_t action;motor_log_snapshot_t snapshot;
+        CHECK(motor_runtime_read_reply(&snapshot,&action));
+        now_us=action.requested_us+420000u;
+        motor_runtime_check_deadline(now_us);check_closed();
+        CHECK(motor_runtime_read_scan(&snapshot,&scan) && !scan.done);
+        // 同一启动的第二次手势不能再次开门。
+        button_steps(true,21u);button_steps(false,21u);CHECK(enables==1u);
+    }
     // 点请求未生效，独立TIM3提交期限必须截止，即使ADC与前台都不再推进。
     start_scan();
     for (unsigned i=0u;i<200u;++i) { now_us+=1000u;pwm_tim1.CNT.value=1000u;sample(); }
@@ -401,7 +416,7 @@ int main()
                 TIM1_UP_IRQHandler();
                 CHECK(motor_runtime_read_scan(&log,&scan));
                 if (scan.step==1u) {
-                    unsigned phase=BOARD_SCAN_DIRECTION==1 ? 1u : 5u;
+                    unsigned phase=BOARD_ALIGNMENT_MODE ? 0u : (BOARD_SCAN_DIRECTION==1 ? 1u : 5u);
                     for (unsigned c=0u;c<3u;++c) { CHECK(active_ticks[c]==oracle[phase][c]); }
                 } else {
                     now_us+=100u;natural_update();TIM1_UP_IRQHandler();
@@ -424,7 +439,7 @@ int main()
     CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
     start_scan();now_us+=1000u;sample(true,2227u,2228u);check_closed(); /* 单路200count，但推算W为-400count。 */
     CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u && !scan.done);
-    std::puts("PASS production scan: seven applied points, fixed direction, explicit zero, bounded statistics/current trip; no hardware");
+    std::puts(BOARD_ALIGNMENT_MODE ? "PASS production alignment: two applied points, preset side, 420ms bound, one gesture, SSI window and current/position/submit/Break/STOP checks; no hardware" : "PASS production scan: seven applied points, fixed direction, explicit zero, bounded statistics/current trip; no hardware");
 #else
     CHECK(motor_runtime_output_profile_count()==1u);
     CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());

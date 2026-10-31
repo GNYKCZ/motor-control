@@ -118,7 +118,7 @@ typedef struct { sensor_offset_t samples; uint32_t began_us, ended_us, action_id
 /** 与零偏/运行态在同一短锁冻结；输出开始前/关闭后的样本不加入统计。 */
 bool motor_runtime_read_current(motor_log_snapshot_t *status, motor_zero_snapshot_t *zero,
                                 motor_current_snapshot_t *current);
-typedef struct { int32_t sum; int16_t minimum, maximum; uint8_t count; } motor_scan_point_t;
+typedef struct { uint32_t started_us, ended_us; int32_t sum; int16_t minimum, maximum; uint8_t count; } motor_scan_point_t;
 typedef struct { motor_scan_point_t point[7]; uint32_t action_id, started_us, ended_us;
     uint16_t origin; int8_t direction; uint8_t step, done, reason, mask; } motor_scan_snapshot_t;
 /** 只读扫描候选，未包含p/d/z判定或参数应用。 */
