@@ -78,9 +78,10 @@ def main():
     inputs = sorted(path for path in firmware.rglob("*") if path.is_file()
                     and "build" not in path.relative_to(firmware).parts
                     and "DebugConfig" not in path.relative_to(firmware).parts
-                    # uVision会在文件名后追加用户名（如m1_sampling.uvguix.<user>），
-                    # 按suffix判断会漏掉这些每次构建都变的IDE状态文件。
-                    and not any(marker in path.name for marker in (".uvopt", ".uvguix", ".bak")))
+                    # 本构建只用源清单与显式参数，不读uVision工程/状态文件；它们会被IDE
+                    # 反复重写（含带用户名的uvguix与自动生成的scvd），不能作为字节级输入。
+                    and not any(marker in path.name
+                                for marker in (".uvprojx", ".uvopt", ".uvguix", ".scvd", ".bak")))
     # 共享控制核依赖：正式固件直接编译canonical测量及反馈模块，禁止复制第二份源码。
     inputs += [root / "control_core" / (name + suffix)
                for name in ("sensor_input", "feedback") for suffix in (".c", ".h")]
