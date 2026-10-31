@@ -146,3 +146,24 @@ CPU预算、提交延迟与PI离散模型，不只修改RCR数字；本批不自
 主机289200组对照的电流3uA、duty2e-6、电压5uV、积分10uV误差门槛，
 另有真实板级0/±40mA、角度/故障/迟到/调度回归。单精度数值误差不是实际电流测量精度。
 优化后实际MCU耗时仍须重新无输出基准验证；不给未经实测的提速数字，不直接按333us提高门槛。
+
+
+## 22:00第一次零参考动作与首因记录修复
+
+用户摘录未含FW1行（预期31-21-52）；P1D0/P1R2 CRC有效，bench32/failed0、max_compute170us、
+sample-to-apply最大773us，4个控制包已施加，动作开始后4241us以f0x20提前撤销；没有达到250ms验收。
+f0x20共用于原始U/V/W、ADC端点/序号、运动以及dq诊断，现有摘录不能确定具体子原因，不能推断硬件坏或改变极性。
+
+重复头帧是确认的软件问题：每个FAULT ADC包再次latch_fault→stop→current_loop_abort，
+无条件header_pending=true导致每1ms重新请求头，UART每约12ms只能发送P1D0，四点记录永远饥饿。
+改为只有真实动作代次/待包首次撤销才通知；后续故障采样保留锁存/禁PWM，不反复抢占导出。
+真实1kHz故障后采样回归确认P1D0一次、P1E1一次、四个P1D1均发出；原dc52c70的abort函数
+在同一新夹具负对照因重复P1D0失败，保留原始函数来源/哈希和失败断言。
+
+增加仅首次保护后的P1E1单帧，不改P1D0/P1D1布局或正常日志频率：7个8位hex字段
+reason/seq/ADC_complete_us/raw_u/raw_v/raw_angle/detail，末CRC4/CRLF；按已有CCITT-FALSE覆盖末CRC前逗号。
+reason1U/2V/3W偏差，detail为count×512（W取负U-V）；4ADC端点、5序号异常，detail0；
+6累计位移，detail机械count；7id/8iq/9q跟踪，detail名义mA。带符号detail用int32补码。
+先board_disable_output再冻结首因，下一步仍由runtime锁存原故障，后续数据不能覆盖首因。
+输出顺序头→首因→有限样本；新增数据只用于判定已有保护哪项触发，不增加运动或电流命令。
+所有128count/80mA/256count/250ms/200us及同步PWM门槛保持；真实板端首因仍待新版本一次受控采集。

@@ -557,6 +557,9 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
             if ((runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
                 && (position_count-action_origin>=(BOARD_DQ_CURRENT_LOOP ? 256 : (BOARD_SCAN_ENABLED ? 4000 : 46))
                     || position_count-action_origin<=-(BOARD_DQ_CURRENT_LOOP ? 256 : (BOARD_SCAN_ENABLED ? 4000 : 46)))) {
+#if BOARD_DQ_CURRENT_LOOP
+                current_loop_capture_trip(6u,sample,position_count-action_origin);
+#endif
                 motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
             }
         }
@@ -576,6 +579,11 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         if (!offset_is_continuous || du>128*512 || du< -128*512 || dv>128*512 || dv< -128*512
             || du+dv>128*512 || du+dv< -128*512 || sample->raw_current_u_count==0u
             || sample->raw_current_u_count==4095u || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u) {
+            unsigned why=!offset_is_continuous ? 5u : ((sample->raw_current_u_count==0u || sample->raw_current_u_count==4095u
+                || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u) ? 4u
+                : ((du>128*512 || du< -128*512) ? 1u : ((dv>128*512 || dv< -128*512) ? 2u : 3u)));
+            int32_t detail=why==1u ? du : (why==2u ? dv : (why==3u ? -du-dv : 0));
+            current_loop_capture_trip(why,sample,detail);
             motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
         } else if (sample->current_completed_us-last_action.started_us>=250000u) {
             last_action.reason=MOTOR_ACTION_DURATION;motor_runtime_stop();

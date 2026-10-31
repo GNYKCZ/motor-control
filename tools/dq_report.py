@@ -3,17 +3,19 @@ import binascii,json,re,sys
 from pathlib import Path
 
 HEADER='cfg ref count compute latency bench failed start sum_u sum_v zero pole_pairs fault reason'.split()
+TRIP='reason sequence t u v angle detail'.split()
 POINT='index sequence t reference id iq vd vq compute latency limited angle'.split()
 def signed(x):return x-0x100000000 if x&0x80000000 else x
 
 def parse(raw):
-    if not raw.endswith(b'\r\n') or not re.fullmatch(rb'P1D[01],(?:[0-9A-F]{8},)+[0-9A-F]{4}\r\n',raw):
+    if not raw.endswith(b'\r\n') or not re.fullmatch(rb'P1(?:D[01]|E1),(?:[0-9A-F]{8},)+[0-9A-F]{4}\r\n',raw):
         raise ValueError('DQ frame format')
-    parts=raw[:-2].split(b',');keys=HEADER if parts[0]==b'P1D0' else POINT
+    parts=raw[:-2].split(b',');keys=HEADER if parts[0]==b'P1D0' else (TRIP if parts[0]==b'P1E1' else POINT)
     if len(parts)!=len(keys)+2 or binascii.crc_hqx(raw[:-6],0xffff)!=int(parts[-1],16):raise ValueError('DQ width/CRC')
     result=dict(zip(keys,[int(p,16) for p in parts[1:-1]]));result['format']=parts[0].decode()
-    for key in ('ref',) if result['format']=='P1D0' else ('reference','id','iq','vd','vq'):
+    for key in (('ref',) if result['format']=='P1D0' else (('detail',) if result['format']=='P1E1' else ('reference','id','iq','vd','vq'))):
         result[key]=signed(result[key])
+    if result['format']=='P1E1' and not (1<=result['reason']<=9 and result['u']<=4095 and result['v']<=4095 and result['angle']<=16383):raise ValueError('DQ trip fields')
     return result
 
 def analyze(header,points):
@@ -40,16 +42,30 @@ def analyze(header,points):
         calibration_verified=False,absolute_current_verified=False,electrical_zero_candidate_used_in_RAM=True,parameters_persisted=False,
         limits='1kHz nominal currents, p7/d+1/candidate zero; tracking does not prove zero or phase order; PWM is stopped before exporting')
 
+def finish_block(header,points,trip):
+    if header['fault'] or header['reason'] in (5,6):
+        names={1:'raw_u',2:'raw_v',3:'inferred_w',4:'adc_endpoint',5:'sequence',6:'movement',7:'id',8:'iq',9:'q_tracking'}
+        return dict(status='FAULT' if header['fault'] else 'STOPPED',accepted=False,configuration=header,
+            first_trip=trip,first_trip_name=names.get(trip['reason']) if trip else 'unavailable',
+            trace_records=len(points),trace_index_complete=len(points)==header['count'] and [p['index'] for p in points]==list(range(len(points))),
+            calibration_verified=False,limits='Diagnostic fault block; does not pass250ms tracking acceptance')
+    return analyze(header,points)
+
 def reports(raw):
-    groups=[];header=None;points=[]
-    for frame in re.findall(rb'P1D[01],[0-9A-F,]+\r?\n',raw):
+    groups=[];header=None;points=[];trip=None
+    for frame in re.findall(rb'P1(?:D[01]|E1),[0-9A-F,]+\r?\n',raw):
         if not frame.endswith(b'\r\n'):frame=frame[:-1]+b'\r\n'
         record=parse(frame)
         if record['format']=='P1D0':
-            if header is not None:groups.append(analyze(header,points))
-            header=record if record['count'] else None;points=[]
-        elif header is not None:points.append(record)
-    if header is not None:groups.append(analyze(header,points))
-    if not groups:raise ValueError('DQ no completed action block')
+            if header is not None:groups.append(finish_block(header,points,trip))
+            header=record if record['count'] or record['fault'] or record['reason'] in (5,6) else None
+            points=[];trip=None
+        elif header is not None:
+            if record['format']=='P1E1':
+                if trip is not None:raise ValueError('DQ duplicate first-trip record')
+                trip=record
+            else:points.append(record)
+    if header is not None:groups.append(finish_block(header,points,trip))
+    if not groups:raise ValueError('DQ no action block')
     return groups
 if __name__=='__main__':print(json.dumps(reports(Path(sys.argv[1]).read_bytes()),ensure_ascii=False,indent=2))

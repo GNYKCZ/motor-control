@@ -91,6 +91,17 @@ int main(void)
         current_loop_poll();trace=false;if (kind==2u) { TIM1_BRK_IRQHandler(); }
         motor_runtime_stop();natural_update();TIM1_UP_IRQHandler();check_closed();CHECK(enables==1u);
     }
+    // 实际FAULT仍以1kHz采样：头帧/首次保护各一次，有限四点必须完整导出。
+    dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));
+    for (unsigned k=0u;k<4u;++k) { dq_frame(action.started_us+k*1000u); }
+    dq_frame(action.started_us+4000u,2157u,2028u);CHECK(status().state==MOTOR_RUNTIME_FAULT);
+    capture_flow=true;flow_count=0u;
+    for (unsigned k=0u;k<12u;++k) { now_us+=1000u;sample();(void)current_loop_report_poll(); }
+    CHECK(count_flow("P1D0,")==1u && count_flow("P1E1,")==1u && count_flow("P1D1,")==4u);
+    std::fputs("DQ_FAILURE_CAPTURE_BEGIN\n",stderr);
+    for (unsigned k=0u;k<flow_count;++k) { std::fputs(flow_lines[k],stderr); }
+    std::fputs("DQ_FAILURE_CAPTURE_END\n",stderr);
+    check_closed();
     // 直接编译main USER3实际前台顺序，低优先任务耗时300us不阻碍先提交电流包。
     dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));now_us+=227u;sample(false,2027u,2028u);
     feedback_delay=300u;production_poll_iteration();feedback_delay=0u;

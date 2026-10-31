@@ -22,7 +22,8 @@ static sensor_offset_t offset;
 static struct { uint32_t source_sampling_profile; uint16_t zero_count; uint8_t pole_pairs; int8_t direction; } calibration;
 static motor_sample_t mailbox;
 static volatile bool queued,inflight,benchmark_failed;
-static volatile bool header_pending;
+static volatile bool header_pending,trip_pending;
+static struct { uint32_t reason,sequence,t,u,v,angle;int32_t detail; } first_trip;
 static current_control_state_t state,pending_state;
 static const current_control_config_t config={{0.5f,150.0f,200.0f},{0.5f,150.0f,200.0f},
     0.04f,0.0577350269f,0.00099f,0.00101f};
@@ -36,7 +37,7 @@ void current_loop_init(void)
     calibration.source_sampling_profile=0x00030001u;calibration.zero_count=7453u;
     calibration.pole_pairs=7u;calibration.direction=1;
     maximum_compute=maximum_latency=action_start=requested_sequence=0u;offset=(sensor_offset_t){0};
-    queued=inflight=benchmark_failed=false;header_pending=true;
+    queued=inflight=benchmark_failed=false;header_pending=true;trip_pending=false;first_trip.reason=0u;
     state=(current_control_state_t){0};pending_state=state;
 }
 bool current_loop_timing_failed(void) { return benchmark_failed; }
@@ -46,13 +47,26 @@ bool current_loop_is_ready(void) { return benchmark_step==32u && !benchmark_fail
 void current_loop_begin(uint32_t next_generation,sensor_offset_t next_offset)
 {
     generation=next_generation;offset=next_offset;used=exported=0u;last_sequence=last_sample_us=0u;
-    action_start=0u;queued=inflight=false;state=(current_control_state_t){0};pending_state=state;
+    action_start=0u;queued=inflight=false;trip_pending=false;first_trip.reason=0u;state=(current_control_state_t){0};pending_state=state;
 }
 void current_loop_abort(void)
 {
+    bool had_request=generation!=0u || queued || inflight;
     generation=0u;queued=inflight=false;state=(current_control_state_t){0};pending_state=state;
-    header_pending=true;
+    if (had_request) { header_pending=true; } /* 后续FAULT采样不能反复抢占有限记录导出。 */
 }
+void current_loop_capture_trip(unsigned reason,const motor_sample_t *sample,int32_t detail)
+{
+    uint32_t mask=board_enter_critical();
+    board_disable_output(); /* 不让记录工作延迟MOE撤销；不改变runtime故障/资格所有权。 */
+    if (generation && !first_trip.reason && sample!=NULL) {
+        first_trip.reason=reason;first_trip.sequence=sample->sequence;first_trip.t=sample->current_completed_us;
+        first_trip.u=sample->raw_current_u_count;first_trip.v=sample->raw_current_v_count;
+        first_trip.angle=sample->encoder.raw_angle_count;first_trip.detail=detail;trip_pending=true;
+    }
+    board_leave_critical(mask);
+}
+
 void current_loop_queue(const motor_sample_t *sample)
 {
     if (!generation) { return; }
@@ -104,6 +118,9 @@ void current_loop_poll(void)
     }
     if (fabsf(result.measured.current_d_A)>0.08f || fabsf(result.measured.current_q_A)>0.08f
         || (elapsed>100000u && fabsf(result.measured.current_q_A-input.reference_q_A)>0.04f)) {
+        unsigned why=fabsf(result.measured.current_d_A)>0.08f ? 7u : (fabsf(result.measured.current_q_A)>0.08f ? 8u : 9u);
+        float detail=why==7u ? result.measured.current_d_A : (why==8u ? result.measured.current_q_A : result.measured.current_q_A-input.reference_q_A);
+        current_loop_capture_trip(why,&sample,milli(detail));
         motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);return;
     }
     board_pwm_ticks_t ticks={(uint16_t)lroundf(result.modulation.duty_u*1800.0f),
@@ -145,15 +162,19 @@ static void word(uint32_t value)
 bool current_loop_report_poll(void)
 {
     if (motor_runtime_output_is_busy() || board_serial_is_busy()) { return false; }
-    if (!header_pending && exported>=used) { return false; }
+    if (!header_pending && !trip_pending && exported>=used) { return false; }
+    bool sending_header=header_pending,sending_trip=!sending_header && trip_pending;
     line_length=5u;
-    if (header_pending) {
+    if (sending_header) {
         memcpy(line,"P1D0,",5u);word(0x00040001u);word((uint32_t)BOARD_DQ_REFERENCE_MA);word(used);
         word(maximum_compute);word(maximum_latency);word(benchmark_step);word(benchmark_failed);word(action_start);
         word(offset.sum_u_count);word(offset.sum_v_count);word(calibration.zero_count);word(calibration.pole_pairs);
         motor_log_snapshot_t status;motor_action_t action;
         if (!motor_runtime_read_reply(&status,&action)) { return false; }
         word(status.fault_flags);word((uint32_t)action.reason);
+    } else if (sending_trip) {
+        memcpy(line,"P1E1,",5u);word(first_trip.reason);word(first_trip.sequence);word(first_trip.t);
+        word(first_trip.u);word(first_trip.v);word(first_trip.angle);word((uint32_t)first_trip.detail);
     } else {
         loop_point_t point=points[exported];memcpy(line,"P1D1,",5u);word(exported);word(point.sequence);word(point.t);
         word((uint32_t)(int32_t)point.reference);word((uint32_t)(int32_t)point.id);word((uint32_t)(int32_t)point.iq);
@@ -163,7 +184,7 @@ bool current_loop_report_poll(void)
     static const char hex[]="0123456789ABCDEF";
     for (unsigned j=0u;j<4u;++j) { line[line_length++]=hex[(crc>>(12u-4u*j))&15u]; }
     line[line_length++]='\r';line[line_length++]='\n';
-    if (board_start_serial_write(line,line_length)) { if (header_pending) { header_pending=false; } else { ++exported; }return true; }
+    if (board_start_serial_write(line,line_length)) { if (sending_header) { header_pending=false; } else if (sending_trip) { trip_pending=false; } else { ++exported; }return true; }
     return false;
 }
 #endif

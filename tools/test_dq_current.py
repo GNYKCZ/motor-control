@@ -2,7 +2,7 @@
 from pathlib import Path
 from dq_report import reports,parse
 from sensor_capture import parse_line
-import subprocess,os,json,hashlib
+import subprocess,os,json,hashlib,re
 r=Path(__file__).resolve().parents[1];fw=r/'firmware/stm32f103';out=r/'build/dq_current/host';out.mkdir(parents=True,exist_ok=True)
 gcc=Path('D:/mingw64/bin/gcc.exe');env=os.environ.copy();env['PATH']=str(gcc.parent)+os.pathsep+env.get('PATH','')
 model=r/'tests/m1/pwm_model';inc=[flag for p in (out,model,fw/'board',fw/'app',r/'control_core') for flag in ('-I',str(p))]
@@ -43,7 +43,13 @@ for reference in (0,40,-40):
  board=out/(str(reference)+'_board.o');cpp=[gcc.parent/'g++.exe','-std=c++11',*flags,*define]
  run([*cpp,'-include',model/'linkage.h','-x','c++','-c',fw/'board/board_pwm.c','-o',board])
  exe=out/(str(reference)+'.exe');run([*cpp,r/'tests/m1/test_dq_current.cpp',board,*objects,'-Wl,--wrap=motor_runtime_poll_feedback','-lm','-o',exe])
- text=run([exe]);(out/(str(reference)+'_trace.txt')).write_text(text,encoding='utf-8');parsed=reports(text.encode());assert len(parsed)==4
+ text=run([exe]);failure=steps[-1]['output'].split('DQ_FAILURE_CAPTURE_BEGIN\n',1)[1].split('DQ_FAILURE_CAPTURE_END',1)[0]
+ failure_records=[parse((line+'\r\n').encode()) for line in failure.splitlines() if line.startswith(('P1D0,','P1D1,','P1E1,'))]
+ trip=next(x for x in failure_records if x['format']=='P1E1')
+ assert trip['reason']==1 and trip['u']==2157 and trip['v']==2028 and trip['detail']==130*512,trip
+ assert sum(x['format']=='P1D0' for x in failure_records)==1 and sum(x['format']=='P1D1' for x in failure_records)==4
+ failure_report=reports(failure.encode())[0];assert failure_report['accepted'] is False and failure_report['first_trip_name']=='raw_u' and failure_report['trace_index_complete']
+ (out/(str(reference)+'_trace.txt')).write_text(text,encoding='utf-8');parsed=reports(text.encode());assert len(parsed)==4
  for report in parsed:
   assert report['plateau_max_q_error_mA']<=6 and report['maximum_abs_id_mA']<=2,report
   assert report['configuration']['ref']==reference
@@ -57,5 +63,16 @@ for reference in (0,40,-40):
   neg=subprocess.run([str(old)],cwd=r,env=env,capture_output=True,text=True,timeout=90)
   assert neg.returncode!=0 and 'status().state==MOTOR_RUNTIME_ACTIVE' in neg.stderr
   evidence['old_main_order_negative']={'head':'ca5bf7a206c63e75685a6624cec80428922412f9','returncode':neg.returncode,'stderr':neg.stderr}
+ if reference==0:
+  old_source=subprocess.check_output(['git','show','dc52c7022a9e5f5e64d3d1230acf9e1193544642:firmware/stm32f103/app/current_loop.c'],cwd=r,text=True)
+  pattern=r'void current_loop_abort\(void\)\n\{.*?\n\}'
+  old_abort=re.search(pattern,old_source,re.S)[0]
+  mutant=out/'old_abort.c';mutant.write_text(re.sub(pattern,lambda _:old_abort,(fw/'app/current_loop.c').read_text(encoding='utf-8'),count=1,flags=re.S),encoding='utf-8')
+  mutant_obj=out/'old_abort.o';run([gcc,'-std=c11',*flags,*define,'-c',mutant,'-o',mutant_obj])
+  mutant_objects=[mutant_obj if obj.name.endswith('_current_loop.o') else obj for obj in objects]
+  old_exe=out/'old_abort.exe';run([*cpp,r/'tests/m1/test_dq_current.cpp',board,*mutant_objects,'-Wl,--wrap=motor_runtime_poll_feedback','-lm','-o',old_exe])
+  neg=subprocess.run([str(old_exe)],cwd=r,env=env,capture_output=True,text=True,timeout=90)
+  assert neg.returncode and 'count_flow("P1D0,")==1u' in neg.stderr
+  evidence['old_abort_negative']={'head':'dc52c7022a9e5f5e64d3d1230acf9e1193544642','returncode':neg.returncode,'stderr':neg.stderr,'old_abort_sha256':hashlib.sha256(old_abort.encode()).hexdigest()}
  print(text.splitlines()[-1])
 evidence['result']='PASS';previous.write_text(json.dumps(evidence,indent=2)+'\n')

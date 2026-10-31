@@ -15,6 +15,8 @@ bool current_loop_is_ready(void);
 bool current_loop_timing_failed(void);
 void current_loop_begin(uint32_t generation, sensor_offset_t offset);
 void current_loop_abort(void);
+/** 先禁止输出，再冻结本动作第一次实验保护证据；reason1U/2V/3W/4端点/5序号/6位移/7id/8iq/9跟踪。 */
+void current_loop_capture_trip(unsigned reason,const motor_sample_t *sample,int32_t detail);
 void current_loop_queue(const motor_sample_t *sample);
 void current_loop_poll(void);
 /** board自然UEV持锁确认后才能采纳临时PI；序号/代次不匹配拒绝。 */
