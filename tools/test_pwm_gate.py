@@ -54,8 +54,8 @@ def main():
             synthetic = tag=="synthetic"
             define = (["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else
                       ["-DMOTOR_LOCAL_PULSE_BASELINE"] if tag=="production" else
-                      ["-DBOARD_SCAN_DIRECTION=-1"] if tag=="scan_reverse" else
-                      ["-DBOARD_ALIGNMENT_MODE="+str(1 if tag=="align_positive" else -1)] if tag.startswith("align_") else [])
+                      ["-DBOARD_ALIGNMENT_MODE=0", "-DBOARD_SCAN_DIRECTION=-1"] if tag=="scan_reverse" else
+                      ["-DBOARD_ALIGNMENT_MODE="+str(1 if tag=="align_positive" else -1)] if tag.startswith("align_") else ["-DBOARD_ALIGNMENT_MODE=0"])
             objects = []
             for source in c_sources:
                 obj = output / (tag + "_" + source.stem + ".o")
@@ -91,7 +91,7 @@ def main():
                 old_window.write_bytes(subprocess.check_output(["git","show",
                     "2371c5b85d5fb538c63c091ffbcf5e78cec513a9:firmware/stm32f103/app/motor_runtime.c"],cwd=root))
                 old_window_obj=output/"scan_window_old.o"
-                run([gcc,"-std=c11",*flags,"-c",old_window,"-o",old_window_obj])
+                run([gcc,"-std=c11",*flags,*define,"-c",old_window,"-o",old_window_obj])
                 old_window_exe=output/"scan_window_old.exe"
                 run([*cpp,root/"tests/m1/test_pwm_gate.cpp",board,old_window_obj,*objects[1:],"-lm","-o",old_window_exe])
                 boundary=subprocess.run([str(old_window_exe)],cwd=root,env=environment,capture_output=True,text=True,timeout=30)

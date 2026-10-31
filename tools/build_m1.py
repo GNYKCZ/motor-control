@@ -19,8 +19,8 @@ def main():
     parser.add_argument("--output", type=Path, default=root / "build/m1")
     parser.add_argument("--scan-direction", type=int, choices=(-1,1), default=1,
                         help="编译期扫描方向；无运行期串口选择，不授权实际运动")
-    parser.add_argument("--alignment-side", type=int, choices=(-1,0,1), default=0,
-                        help="显式两点对齐预置侧；0保持七点历史模式，不授权实际运动")
+    parser.add_argument("--alignment-side", type=int, choices=(-1,0,1), default=1,
+                        help="两点对齐预置侧，默认+1与Keil一致；0保留七点历史模式，不授权实际运动")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
