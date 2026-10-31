@@ -64,7 +64,7 @@ def main():
         command = [gcc, "-std=c11", "-D__USE_MINGW_ANSI_STDIO=1", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic"]
         for directory in [root / "tests/m1/uart_stub", output, fw / "board", fw / "app", root / "control_core"]:
             command += ["-I", directory]
-        run(command + sources + ["-lm", "-o", output / "test_command.exe"])
+        run(command + ["-DBOARD_ALIGNMENT_MODE=0"] + sources + ["-lm", "-o", output / "test_command.exe"])
         target_text = run([output / "test_command.exe"])
         scan_actual=next((line+"\r\n").encode() for line in target_text.splitlines() if line.startswith("P1A1,"))
         scan_prefix=("P1A1,00000001,08,00,01,00000000,00000000,01,00,00,00,00,0000,00000000,00000000,00010001,"+"00,00000000,0000,0000,"*7).encode()

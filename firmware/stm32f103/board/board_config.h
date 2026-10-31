@@ -3,6 +3,7 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
+#define BOARD_FIRMWARE_VERSION "31-13-31" /**< 2026-10-31 13:31，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
 #define BOARD_SAMPLING_PROFILE_ID 0x00020001u /**< 标定配置：2kHz PWM、TIM2延时ADC、1kHz原始流。 */
 /* 外设时钟/ARR/RCR/比较值只由 m1_sampling.ioc 生成，不在本头复制第二套参数。 */
@@ -11,9 +12,13 @@
 #define BOARD_SAMPLE_GAP_LIMIT_US 3000u     /**< 测试配置正常约 999.44 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 10000u   /**< 测试配置首个完整有效帧最多等待 10 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 5000u     /**< 前台每5秒尝试导出一次；不影响采样或命令回执。 */
-/* 0保留已验证七点模式；+1/-1仅由显式构建选择预置侧。串口不能选择。 */
+/* Keil默认+1：当前正侧两点对齐；0显式保留七点，-1为另一预置侧。串口不能选择。 */
 #ifndef BOARD_ALIGNMENT_MODE
+#if defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE)
 #define BOARD_ALIGNMENT_MODE 0
+#else
+#define BOARD_ALIGNMENT_MODE 1
+#endif
 #endif
 #if BOARD_ALIGNMENT_MODE != 0 && BOARD_ALIGNMENT_MODE != 1 && BOARD_ALIGNMENT_MODE != -1
 #error "Alignment mode must be 0, +1 or -1"

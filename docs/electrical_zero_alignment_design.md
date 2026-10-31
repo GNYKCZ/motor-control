@@ -120,7 +120,7 @@ M3B3仍每5秒；IRQ整数有界统计，停止后按需查询，不引入持续
 ## Work实现与操作契约
 
 用户随后授权Work继续按本方案实现。原七点扫描及其历史FAIL保持，不因新增固定U候选改变。
-`BOARD_ALIGNMENT_MODE=0`仍为源码/Keil默认的七点模式；+1/-1显式选择两点预置侧。
+`BOARD_ALIGNMENT_MODE=1`现为源码/Keil默认的正侧两点模式；0显式保留七点，-1选择另一预置侧。
 不修改用户本地Keil工程设置。两种对齐HEX由已有构建入口生成，不能仅凭M3B3名称判断下载了哪种模式。
 
 ```powershell
@@ -129,7 +129,7 @@ python -B tools/build_m1.py --compiler-bin D:/Keil_v5/ARM/ARMCLANG/bin --alignme
 python -B tools/alignment_report.py --pole-pairs 7 --encoder-direction 1 path/to/positive_frame.txt path/to/negative_frame.txt
 ```
 
-命令中的摘录文件由现场实际取得，不是仓库附送的实测成功文件；未填写`--alignment-side`只构建旧七点固件。
+命令中的摘录文件由现场实际取得，不是仓库附送的实测成功文件；未填写`--alignment-side`与Keil默认一致，构建正侧两点固件。
 分析只有一个P1A1时，仅计算首末同U的条件候选并保留原七点分析状态；不能将同一文件提供两次当独立重复。
 只提供一个P1A2时只出该侧候选，只有两侧有效结果/净位移方向和幅度/配置与p/d前提一致且圆差<=15度才报告重复性。
 所有输出仍不标绝对校准通过，也不应用参数；硬件及固件身份须由现场记录。
@@ -179,3 +179,15 @@ FAILED_ZERO_INVALID、FAILED_ZERO_TIMEOUT、FAILED_STOP、ACTION_DONE、ACTION_F
 ACTION_DONE表示动作序列正常结束，不等于零位准确或标定通过。
 提示只在前台发送，无IRQ格式化或阻塞发送；周期M3B3仍5秒，动作期间继续暂停普通周期日志。
 实际新流程的板端日志与前台开销尚未实测，不能用主机测试或构建声明板端时序验收通过。
+
+## 串口版本识别
+
+当前版本标识见BOARD_FIRMWARE_VERSION与main.c文件头同值注释，采用上海时间日-时-分。
+Reset后先打开串口可见一次例如`FW1,31-13-31,ALIGN_POS`；ALIGN_NEG为另一预置侧，SCAN_POS/SCAN_NEG为七点模式。
+版本提示不带CRC，仅用于识别预期编译版本与模式，不是独立烧录读回或校准证据，不改变动作资格。
+仍需等待READY_PRESS_PA12后才能按PA12，Reset打印版本本身不触发动作。
+
+用户当前操作入口为`firmware/stm32f103/MDK-ARM/m1_sampling.uvprojx`，保持DAP配置，先Rebuild再Download。
+Download本身不保证重新编译；下载后VOFA先接收再Reset，用FW1版本和ALIGN_POS核对当前模式。
+源码改动由Keil引用并在重新编译时生效，切分支/更新文件需确认实际工作目录；只打开工程或只下载不能证明用了新源码。
+本轮用户明确免去新增版本/默认模式调整的独立审查并要求直接合并；不据此豁免未来实现Review。

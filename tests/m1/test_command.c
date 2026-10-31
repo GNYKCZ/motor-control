@@ -267,5 +267,10 @@ int main(void)
     CHECK(automatic_fail==1u && !fake_pwm);
     puts("PASS automatic prepare through production UART: zero/failure once with unavailable PWM, no false READY, enable idempotent, sequence untouched, STOP preserved, no output");
 #endif
+    start();command_enable_version_report();reply_done();
+    CHECK(strncmp(wire,"FW1," BOARD_FIRMWARE_VERSION ",",4u+sizeof(BOARD_FIRMWARE_VERSION))==0);
+    CHECK(!fake_pwm);fputs(wire,stdout);
+    wire_length=0u;wire[0]='\0';command_enable_version_report();reply_done();
+    CHECK(wire_length==0u && !fake_pwm); /* 每启动一次；重复启用不刷屏。 */
     return 0;
 }
