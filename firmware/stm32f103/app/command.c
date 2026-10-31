@@ -34,6 +34,13 @@ static const uint8_t scan_widths[43]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,
     2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4};
 static const uint8_t alignment_widths[28]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,
     2,8,4,4,8,8,2,8,4,4,8,8};
+/* 前台自动流程只安排零偏和只读报告；唯一输出入口仍在runtime的PA12手势。 */
+enum { FLOW_OFF, FLOW_WAIT, FLOW_ZERO, FLOW_READY, FLOW_FAILED, FLOW_FINISHED };
+static unsigned flow_state, flow_notice;
+static volatile bool flow_enabled, flow_cancelled; /* UART IRQ取消与前台准备共用，重开事务另有短锁。 */
+static bool flow_zero_pending, flow_result_pending, flow_result_seen;
+static uint8_t flow_zero_result;
+static uint32_t flow_deadline_us, flow_last_us;
 static unsigned scan_field, scan_digits;
 static const uint8_t *sequence_widths; static unsigned sequence_fields;
 
@@ -71,6 +78,8 @@ void command_init(void)
     uint32_t mask=board_enter_critical();
     reset_frame(); rx_drop=false; have_sequence=false; last_sequence=0u;
     reply_pending=false; reply_building=false; reply_borrowed=false; reply_index=0u;
+    flow_enabled=false; flow_state=FLOW_OFF; flow_notice=0u; flow_cancelled=false;
+    flow_zero_pending=false; flow_result_pending=false; flow_result_seen=false;
     board_leave_critical(mask);
 }
 
@@ -133,7 +142,7 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
         else if (rx_crc!=rx_received_crc) { result=REPLY_CRC; }
         else {
             /* STOP在完整CRC正确时先执行；即使序号重复/过期、邮箱满、TX忙也不能等待回执。 */
-            if (rx_code==REQUEST_STOP) { motor_runtime_stop(); }
+            if (rx_code==REQUEST_STOP) { motor_runtime_stop(); if (flow_enabled) { flow_cancelled=true; } }
             uint32_t advance=rx_sequence-last_sequence;
             if (have_sequence && (advance==0u || advance>=0x80000000u)) { result=REPLY_SEQUENCE; }
             else {
@@ -243,8 +252,74 @@ static char reply_character(unsigned i)
     return i==93u ? '\r' : '\n';
 }
 
+void command_enable_local_flow(void)
+{
+    if (!BOARD_ALIGNMENT_MODE || flow_enabled) { return; }
+    flow_enabled=true; flow_state=FLOW_WAIT; flow_notice=1u;
+    flow_last_us=board_get_time_us(); flow_deadline_us=flow_last_us+3000000u;
+}
+
+static void local_flow_failed(unsigned notice, uint8_t result)
+{
+    flow_state=FLOW_FAILED; flow_notice=notice;
+    flow_zero_pending=true; flow_zero_result=result;
+}
+
+static void local_flow_poll(uint32_t now_us)
+{
+    if (!BOARD_ALIGNMENT_MODE || !flow_enabled || motor_runtime_output_is_busy() || now_us-flow_last_us<1000u) { return; }
+    flow_last_us=now_us;
+    motor_log_snapshot_t status; motor_action_t action;
+    if (!motor_runtime_read_reply(&status,&action)) { return; }
+    if (action.id) {
+        if (!flow_result_seen) {
+            flow_result_seen=true; flow_state=FLOW_FINISHED;
+            flow_result_pending=true;
+            flow_notice=(!status.fault_flags && action.reason==MOTOR_ACTION_DURATION) ? 8u : 9u;
+        }
+        return; /* 有动作后永不自动重开零偏，不返还手势。 */
+    }
+    if (flow_state==FLOW_FAILED || flow_state==FLOW_FINISHED) { return; }
+    if (flow_cancelled) { local_flow_failed(10u,REPLY_DENIED); return; }
+    if (status.fault_flags) { local_flow_failed(4u,REPLY_DENIED); return; }
+    if (flow_state==FLOW_WAIT) {
+        uint32_t mask=board_enter_critical();
+        bool restarted=!flow_cancelled && motor_runtime_restart_zero();
+        board_leave_critical(mask);
+        if (restarted) {
+            flow_state=FLOW_ZERO; flow_notice=2u; flow_deadline_us=now_us+1000000u;
+        } else if ((int32_t)(now_us-flow_deadline_us)>=0) { local_flow_failed(5u,REPLY_TIMEOUT); }
+    } else if (flow_state==FLOW_ZERO) {
+        motor_zero_snapshot_t zero;
+        if (!motor_runtime_read_zero(&status,&zero)) { local_flow_failed(4u,REPLY_SNAPSHOT); return; }
+        if ((zero.flags & 2u) || zero.offset.accepted_count==512u) {
+            if (motor_runtime_zero_is_ready()) {
+                flow_state=FLOW_READY; flow_notice=3u; flow_zero_pending=true; flow_zero_result=REPLY_OK;
+            } else { local_flow_failed(6u,REPLY_DENIED); }
+        } else if ((int32_t)(now_us-flow_deadline_us)>=0) { local_flow_failed(7u,REPLY_TIMEOUT); }
+    } else if (flow_state==FLOW_READY && !motor_runtime_zero_is_ready()) {
+        local_flow_failed(6u,REPLY_DENIED);
+    }
+}
+
+static bool local_flow_notice(void)
+{
+    /* 提示仅辅助阅读，CRC保护的P1Z1/P1A2才承载数据；无通用格式化。 */
+    static const char *const lines[]={"", "P1F1,WAIT_STILL\r\n", "P1F1,COLLECT_ZERO\r\n",
+        "P1F1,READY_PRESS_PA12\r\n", "P1F1,FAILED_INPUT\r\n", "P1F1,FAILED_NOT_STILL\r\n",
+        "P1F1,FAILED_ZERO_INVALID\r\n", "P1F1,FAILED_ZERO_TIMEOUT\r\n",
+        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n"};
+    if (!flow_enabled || !flow_notice) { return false; }
+    if (board_serial_is_busy()) { return true; }
+    const char *line=lines[flow_notice]; uint32_t length=0u;
+    while (line[length]) { ++length; }
+    if (board_start_serial_write(line,length)) { flow_notice=0u; }
+    return true;
+}
+
 bool command_poll(uint32_t now_us)
 {
+    local_flow_poll(now_us);
     uint32_t mask=board_enter_critical();
     expire_frame(now_us);
     board_leave_critical(mask);
@@ -256,8 +331,13 @@ bool command_poll(uint32_t now_us)
         mask=board_enter_critical();
         bool pending=reply_pending;
         if (pending) { reply=pending_reply; reply_pending=false; }
+        else if (flow_zero_pending) {
+            reply=(reply_event_t){0u,REQUEST_ZERO_STATUS,flow_zero_result}; flow_zero_pending=false; pending=true;
+        } else if (flow_result_pending) {
+            reply=(reply_event_t){0u,REQUEST_SCAN_STATUS,REPLY_OK}; flow_result_pending=false; pending=true;
+        }
         board_leave_critical(mask);
-        if (!pending) { return false; }
+        if (!pending) { return local_flow_notice(); }
         if (!motor_runtime_read_reply(&reply_status,&reply_action)) {
             motor_log_snapshot_t empty={0}; motor_action_t no_action={0}; reply_status=empty; reply_action=no_action; reply.result=REPLY_SNAPSHOT;
         }

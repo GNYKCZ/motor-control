@@ -681,6 +681,27 @@ bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *acti
     return valid;
 }
 
+/** 与PA12共用同一资格判断；自动准备不能另设较宽的零偏门槛。调用者持锁。 */
+static bool zero_is_ready(void)
+{
+    return runtime_status.state==MOTOR_RUNTIME_DISABLED && runtime_status.fault_flags==0u
+        && zero_explicit && !runtime_status.offset_is_aborted
+        && runtime_status.estimated_offset.accepted_count==512u
+        && runtime_status.estimated_offset.minimum_u_count>64u
+        && runtime_status.estimated_offset.maximum_u_count<4031u
+        && runtime_status.estimated_offset.minimum_v_count>64u
+        && runtime_status.estimated_offset.maximum_v_count<4031u
+        && runtime_status.estimated_offset.maximum_u_count-runtime_status.estimated_offset.minimum_u_count<=32
+        && runtime_status.estimated_offset.maximum_v_count-runtime_status.estimated_offset.minimum_v_count<=32
+        && still_seen && board_get_time_us()-still_since_us>=250000u && output_inputs_are_valid();
+}
+
+bool motor_runtime_zero_is_ready(void)
+{
+    uint32_t mask=board_enter_critical(); bool ready=zero_is_ready();
+    board_leave_critical(mask); return ready;
+}
+
 void motor_runtime_poll_button(bool pressed, uint32_t now_us)
 {
     uint32_t mask=board_enter_critical();
@@ -703,14 +724,7 @@ void motor_runtime_poll_button(bool pressed, uint32_t now_us)
             bool still=still_seen && board_get_time_us()-still_since_us>=250000u;
             if (BOARD_SCAN_ENABLED) {
                 scan_capture.action_id=last_action.id; scan_capture.origin=runtime_status.sample.encoder.raw_angle_count;
-                still=still && zero_explicit && !runtime_status.offset_is_aborted
-                    && runtime_status.estimated_offset.accepted_count==512u
-                    && runtime_status.estimated_offset.minimum_u_count>64u
-                    && runtime_status.estimated_offset.maximum_u_count<4031u
-                    && runtime_status.estimated_offset.minimum_v_count>64u
-                    && runtime_status.estimated_offset.maximum_v_count<4031u
-                    && runtime_status.estimated_offset.maximum_u_count-runtime_status.estimated_offset.minimum_u_count<=32
-                    && runtime_status.estimated_offset.maximum_v_count-runtime_status.estimated_offset.minimum_v_count<=32;
+                still=still && zero_is_ready();
                 if (!still) { scan_capture.reason=10u; }
             }
             if (still && motor_runtime_arm(1u)) {

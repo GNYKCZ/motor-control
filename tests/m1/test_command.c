@@ -16,6 +16,8 @@ static uint32_t mask, clock_us, disables, sample_n;
 static bool fake_pwm, live_samples, fault_on_unlock, hold_angle;
 static char wire[512];
 static size_t wire_length;
+static bool count_automatic;
+static unsigned automatic_zero, automatic_ready, automatic_fail;
 uint32_t board_enter_critical(void) { uint32_t old=mask; mask=1u; return old; }
 void board_leave_critical(uint32_t old)
 {
@@ -41,6 +43,7 @@ static void start(void)
 {
     CHECK(!board_serial_is_busy());
     memset(&test_usart,0,sizeof(test_usart)); clock_us=0u; sample_n=0u; live_samples=false;hold_angle=false;
+    count_automatic=false;automatic_zero=0u;automatic_ready=0u;automatic_fail=0u;
     motor_runtime_init(); command_init(); motor_runtime_finish_boot(true); board_start_serial_receive();
     CHECK((test_usart.CR1 & (USART_CR1_RXNEIE|USART_CR1_PEIE))==(USART_CR1_RXNEIE|USART_CR1_PEIE));
     CHECK(test_usart.CR3 & USART_CR3_EIE);
@@ -76,6 +79,11 @@ static void tx_drain(void)
     CHECK(board_serial_is_busy()); /* 末字节送DR不等于TC完成。 */
     test_usart.SR=USART_SR_TC; USART2_IRQHandler();
     CHECK(!board_serial_is_busy()); wire[wire_length]='\0';
+    if (count_automatic) {
+        if (strncmp(wire,"P1Z1,00000000,05,",17u)==0) { ++automatic_zero; }
+        if (strcmp(wire,"P1F1,READY_PRESS_PA12\r\n")==0) { ++automatic_ready; }
+        if (strncmp(wire,"P1F1,FAILED_",12u)==0) { ++automatic_fail; }
+    }
 }
 
 static void reply_done(void)
@@ -93,6 +101,18 @@ static unsigned result(void)
     CHECK(sscanf(wire+17,"%2x",&value)==1); return value;
 }
 
+#if BOARD_ALIGNMENT_MODE
+static void automatic_ticks(unsigned count)
+{
+    for (unsigned i=0u;i<count;++i) {
+        clock_us+=1000u;sample();motor_runtime_poll_button(false,clock_us);
+        for (unsigned j=0u;j<8u;++j) {
+            (void)command_poll(clock_us);
+            if (board_serial_is_busy()) { tx_drain(); wire_length=0u;wire[0]='\0'; }
+        }
+    }
+}
+#endif
 int main(void)
 {
     start();
@@ -230,6 +250,22 @@ int main(void)
     start();before=disables;feed(vector(1u,8u));reply_done();
     CHECK(wire_length==(BOARD_ALIGNMENT_MODE ? 183u : 248u) && result()==0u && disables==before && !fake_pwm);
     CHECK(strncmp(wire,BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,",5u)==0);fputs(wire,stdout);
+#endif
+#if BOARD_ALIGNMENT_MODE
+    start();hold_angle=true;live_samples=true;count_automatic=true;command_enable_local_flow();
+    automatic_ticks(1200u);
+    /* 此旧UART夹具明确没有可用PWM设备；应发送完整零偏与失败，不能谎报READY。
+     * 真正board_pwm的READY/按键/动作完整流另在寄存器模型验证。 */
+    CHECK(automatic_zero==1u && automatic_ready==0u && automatic_fail==1u);
+    CHECK(!fake_pwm && !motor_runtime_zero_is_ready());
+    CHECK(motor_runtime_read_zero(&snap,&zero));uint32_t automatic_began=zero.began_us;
+    command_enable_local_flow();automatic_ticks(100u);
+    CHECK(automatic_zero==1u && automatic_ready==0u && automatic_fail==1u && !fake_pwm);
+    CHECK(motor_runtime_read_zero(&snap,&zero) && zero.began_us==automatic_began);
+    // 自动数据不占用用户序号1；STOP回执和自动失败提示都经真实UART发送。
+    feed(vector(1u,2u));reply_done();CHECK(result()==0u);
+    CHECK(automatic_fail==1u && !fake_pwm);
+    puts("PASS automatic prepare through production UART: zero/failure once with unavailable PWM, no false READY, enable idempotent, sequence untouched, STOP preserved, no output");
 #endif
     return 0;
 }
