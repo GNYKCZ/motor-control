@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 from sensor_capture import parse_line
 from commutation_report import analyze, combine
+from alignment_report import analyze as analyze_alignment, combine as combine_alignment
 
 
 def main():
@@ -26,7 +27,7 @@ def main():
     inputs = c_sources + [fw / "board/board_pwm.c", root / "tests/m1/test_pwm_gate.cpp", Path(__file__).resolve()]
     inputs += list(model.glob("*.h")) + list((fw / "app").glob("*.h")) + list((fw / "board").glob("*.h"))
     inputs += [root / "control_core" / (n + ".h") for n in ("feedback", "sensor_input")]
-    inputs += [root / "tools" / n for n in ("sensor_capture.py","commutation_report.py")]
+    inputs += [root / "tools" / n for n in ("sensor_capture.py","commutation_report.py","alignment_report.py")]
     hashes = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     evidence = {"head": head, "input_sha256": hashes, "result": "FAIL", "steps": [], "hardware": "NOT RUN"}
@@ -48,6 +49,7 @@ def main():
         includes = [flag for directory in (model, fw / "board", fw / "app", root / "control_core") for flag in ("-I", directory)]
         flags = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic", *includes]
         scan_reports=[]
+        automatic_reports=[]
         for tag in ("production", "scan_forward", "scan_reverse", "align_positive", "align_negative", "synthetic"):
             synthetic = tag=="synthetic"
             define = (["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else
@@ -77,6 +79,13 @@ def main():
                 if not record["done"] or record["mask"]!=3 or record["direction"]!=(1 if tag.endswith("positive") else -1):
                     raise RuntimeError("alignment mode/frame mismatch")
                 evidence[tag]=record
+                hints=[parse_line((line+"\r\n").encode()) for line in target_text.splitlines() if line.startswith("P1F1,")]
+                if not any(r["hint"]=="READY_PRESS_PA12" for r in hints) or not any(r["hint"]=="ACTION_DONE" for r in hints):
+                    raise RuntimeError("automatic preparation/result hints missing")
+                automatic=next(parse_line((line+"\r\n").encode()) for line in target_text.splitlines()
+                               if line.startswith("P1A2,00000000,"))
+                automatic_reports.append(analyze_alignment(automatic,7,1))
+                evidence[tag+"_automatic"]={"hints":hints,"result":automatic}
             if tag=="scan_forward":
                 old_window=output/"scan_window_old.c"
                 old_window.write_bytes(subprocess.check_output(["git","show",
@@ -123,6 +132,10 @@ def main():
                 evidence["window_old_negative"] = {"returncode": old_result.returncode,
                     "output": old_result.stdout + old_result.stderr,
                     "board_sha256": hashlib.sha256(baseline.read_bytes()).hexdigest()}
+        automatic_geometry=combine_alignment(*automatic_reports)
+        if not automatic_geometry["repeatability_checked"] or abs(automatic_geometry["electrical_zero_rad"])>1e-10:
+            raise RuntimeError("automatic model -> query -> parse -> conditional zero analysis failed")
+        evidence["automatic_geometry_host_model_only"]=automatic_geometry
         geometry=combine(*scan_reports)
         if geometry["pole_pairs"]!=7 or geometry["encoder_direction"]!=1:
             raise RuntimeError("production seven-point geometry mapping failed")

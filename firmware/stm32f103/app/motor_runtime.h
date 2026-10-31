@@ -127,6 +127,8 @@ bool motor_runtime_read_scan(motor_log_snapshot_t *status, motor_scan_snapshot_t
 bool motor_runtime_commit_scan_point(uint32_t generation, unsigned step, uint32_t now_us);
 /** 仅DISABLED/无故障/新鲜静止/尚无动作时重开候选批，不改变输出资格。 */
 bool motor_runtime_restart_zero(void);
+/** 前台只读资格；与PA12启动使用同一完整零偏/静止/新鲜度/无故障门槛。 */
+bool motor_runtime_zero_is_ready(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */

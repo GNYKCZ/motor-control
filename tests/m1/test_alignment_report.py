@@ -77,3 +77,12 @@ assert abs(math.degrees(observed["same_action_difference_electrical_rad"])-2.395
 assert not observed["repeatability_checked"]
 rejects(lambda: combine(observed,observed))
 print("PASS fixed-U conditional zero: p1/5/7/11/32, d+/-, both presets, encoder/time wrap, malformed timing/statistics/config, no-motion/sign/duplicate rejection; original seven-point FAIL preserved")
+
+# 固定提示只是人工观察辅助，不带CRC，必须标为diagnostic_only。
+for hint in ("WAIT_STILL","COLLECT_ZERO","READY_PRESS_PA12","FAILED_INPUT","FAILED_NOT_STILL",
+             "FAILED_ZERO_INVALID","FAILED_ZERO_TIMEOUT","FAILED_STOP","ACTION_DONE","ACTION_FAILED"):
+    item=parse_line(("P1F1,"+hint+"\r\n").encode())
+    assert item["diagnostic_only"] and item["hint"]==hint
+for raw in (b"P1F1,READY\r\n",b"P1F1,READY_PRESS_PA12\n",b"P1F1,ACTION_DONE,extra\r\n"):
+    rejects(lambda: parse_line(raw))
+print("PASS automatic diagnostic hints: exact finite layout; no CRC/timestamp authority claimed")

@@ -46,6 +46,14 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
+    if raw.startswith(b"P1F1,"):
+        # 固定提示不带CRC，仅辅助观察；不能充当真实数据/校准或动作成功证据。
+        hints={b"WAIT_STILL",b"COLLECT_ZERO",b"READY_PRESS_PA12",b"FAILED_INPUT",b"FAILED_NOT_STILL",
+               b"FAILED_ZERO_INVALID",b"FAILED_ZERO_TIMEOUT",b"ACTION_DONE",b"ACTION_FAILED",b"FAILED_STOP"}
+        hint=raw[5:-2]
+        if not raw.endswith(b"\r\n") or hint not in hints:
+            raise ValueError("P1F1 hint mismatch")
+        return {"format":"P1F1","hint":hint.decode("ascii"),"diagnostic_only":True}
     if raw.startswith((b"P1A1,", b"P1A2,")):
         alignment=raw.startswith(b"P1A2,")
         name="P1A2" if alignment else "P1A1"
@@ -305,6 +313,8 @@ def save_chunks(chunks, output, metadata):
                 record["device_time_us"] = record["fields"].get("t")
                 if record["fields"]["format"] in ("P1A1","P1A2"):
                     record["device_time_kind"]="scan_window_only; see start/end, no snapshot timestamp"
+                elif record["fields"]["format"]=="P1F1":
+                    record["device_time_kind"]="diagnostic_hint_only; no device timestamp or CRC"
                 info["valid_lines"] += 1
             except (ValueError, UnicodeError) as error:
                 record["error"] = str(error)

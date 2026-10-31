@@ -113,6 +113,7 @@ int main(void)
   if (!board_start_sampling()) {
     motor_runtime_latch_fault(MOTOR_FAULT_INITIALIZATION);
   }
+  command_enable_local_flow();
   /* USER CODE END 2 */
 
   /* Infinite loop */
