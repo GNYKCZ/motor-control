@@ -97,3 +97,29 @@ CRC覆盖末CRC之前含最后逗号；每个包≤160B。仅停止后导出，�
 P1R2无故障/正常结束、ACTION_DONE，自动导出约250个P1D1；保留文件交工具分析，不必手动发送查询。
 先完成零参考后，再展示并确认具体的单方向小参考幅度/时长/运动范围；不自动烧录正负两种或连跑。
 有异常、FAILED或明显运动即停止/断12V，保留失败块，不反复触发。无示波器/独立电流基准的限制继续保留。
+
+
+## 交付栈空间修复（Work自查）
+
+首次软件Review后，实际ARM链接callgraph发现main→current_loop→PI→sin调用链最大736B；
+ADC IRQ完整故障路径272B，加Cortex-M3异常入栈32B即1040B，原厂startup预留1KiB不足以覆盖这一保守组合。
+因此不按原1KiB布局交付。保持厂商startup原始字节/47项hash不变，在scatter明确把原STACK置于
+0x20004C00..0x20005000，连续下方0x20004800..0x20004C00额外保留1KiB EMPTY；
+实际栈顶仍是20KiB SRAM末端__initial_sp=0x20005000，总向下保留2KiB，普通RW/ZI不得进入保留区。
+当前正式工程固定microlib，不使用非microlib的__user_initial_stackheap/Stack_Mem下界；改库类型时必须复核布局。
+
+静态栈分析同时列出USART(priority3)128B、TIM2(priority2)88B、DMA(priority1)128B、
+ADC(priority0)272B；加主链736B和四个32B异常帧为1480B，另计SysTick/对齐/停机异常余量，仍小于2KiB。
+这是对启用路径的保守组合，不宣称静态工具消除了全部间接调用/异常风险，也不冒充实测栈峰值。
+通过实际armlink布局/符号/向量首字检查无堆/普通ZI与栈重叠，目标构建和独立增量复审后交付。
+
+
+## 与本地例程的电流环频率对照
+
+已实际读取D:/FOC_Projects/stm32_foc与stm32_foc_2的conf.h、tim.c、adc.c和foc.c。
+基础例程PSC0/ARR1800/CMS3/RCR4：载波20kHz、ADC/电流控制8kHz；进阶ARR1799/RCR3：
+载波约20.011kHz，ADC/电流控制约10.006kHz，宏motor_adc_freq按名义10kHz定义。
+进阶ADC完成IRQ中直接进行Clarke/Park、两个CMSIS PID及逆变换/SVPWM，使用float与11bit三角表。
+本项目1kHz是已建立采样基线下的低带宽验证阶段，不宣称电机的最佳最终频率；
+其Ki显式乘dt且PI输出单位V，例程归一化PID参数不能直接复制。提高频率需同时重排SSI/ADC时刻、
+CPU预算、提交延迟与PI离散模型，不只修改RCR数字；本批不自动扩大该范围。

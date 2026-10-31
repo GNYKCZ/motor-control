@@ -5,7 +5,13 @@ LR_IROM1 0x08000000 0x00010000 {
     *(InRoot$$Sections)
     .ANY (+RO)
   }
-  RW_IRAM1 0x20000000 0x00005000 {
+  RW_IRAM1 0x20000000 0x00004800 {
     .ANY (+RW +ZI)
+  }
+  ; 原厂startup保留1KiB STACK原字节；另留连续下方1KiB，实际向下增长空间2KiB。
+  ; 当前正式目标使用microlib的__initial_sp，不使用非microlib的Stack_Mem下界返回。
+  RW_STACK_EXTENSION 0x20004800 EMPTY 0x00000400 { }
+  RW_STACK 0x20004C00 UNINIT 0x00000400 {
+    startup_stm32f103xb.o (STACK)
   }
 }
