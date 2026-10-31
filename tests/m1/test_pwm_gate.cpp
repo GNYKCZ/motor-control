@@ -10,7 +10,7 @@
 PwmTimer pwm_tim1(true),pwm_tim3(false);
 PwmGpio pwm_gpioa,pwm_gpiob;
 static uint32_t now_us,mask,sequence,clock_step;
-static uint32_t active_ticks[3];
+static uint32_t active_ticks[3],update_us,update_lag;
 static bool fixed_angle, delay_after_moe;
 bool board_sampling_phase_is_ready(void) { return true; }
 static uint16_t fixed_count;
@@ -37,6 +37,7 @@ static void advance_timer(unsigned ticks)
 
 static void natural_update()
 {
+    update_us=now_us;
     active_ticks[0]=pwm_tim1.CCR1.value; active_ticks[1]=pwm_tim1.CCR2.value; active_ticks[2]=pwm_tim1.CCR3.value;
     pwm_tim1.SR.value|=TIM_SR_UIF;
 }
@@ -67,7 +68,7 @@ void pwm_model_written(unsigned id, uint32_t value)
 #elif defined(MOTOR_LOCAL_PULSE_BASELINE)
         if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
 #elif BOARD_SINGLE_U
-        if (active_ticks[0]!=900u || active_ticks[1]!=0u || active_ticks[2]!=0u
+        if (active_ticks[0]!=0u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #elif BOARD_ALIGNMENT_MODE == 1
         if (active_ticks[0]!=60u || active_ticks[1]!=60u || active_ticks[2]!=0u
 #elif BOARD_ALIGNMENT_MODE == -1
@@ -75,7 +76,7 @@ void pwm_model_written(unsigned id, uint32_t value)
 #else
         if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #endif
-            || pwm_tim1.CNT.value<=300u || (!BOARD_SINGLE_U && (pwm_tim1.CR1.value & TIM_CR1_DIR))) { ++early_enables; }
+            || (!BOARD_SINGLE_U && (pwm_tim1.CNT.value<=300u || (pwm_tim1.CR1.value & TIM_CR1_DIR)))) { ++early_enables; }
         if (delay_after_moe) { pwm_tim1.CNT.value=1700u; }
     }
     if (id==R_CRH && (value & 0xfffu)==0xaaau) {
@@ -92,6 +93,12 @@ void board_leave_critical(uint32_t old)
 }
 uint32_t board_get_time_us(void) { if (advancing_ticks) { advance_timer(36u); } uint32_t old=now_us;now_us+=clock_step;return old; }
 uint32_t board_get_time_us_locked(void) { CHECK(mask==1u);return board_get_time_us(); }
+bool board_get_update_time_us(uint32_t *event) {
+    CHECK(mask==1u);uint32_t before=board_get_time_us_locked();
+    uint32_t after=board_get_time_us_locked();
+    if (after-before>2u || after-update_us>500u || update_lag>500u) { return false; }
+    *event=update_us;return true;
+}
 #if BOARD_SCAN_ENABLED
 static char scan_wire[257];
 static bool capture_flow;
@@ -135,7 +142,7 @@ static void reset(uint32_t base=0u)
     trace=false;inject_at=0u;inject_kind=0u;access_count=0u;queued_stop=false;mask=0u;
     advancing_ticks=0u;fraction_ticks=0u;
     fixed_angle=false; delay_after_moe=false; fixed_count=0u;
-    clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
+    update_lag=0u;update_us=base;clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
     pwm_tim1.BDTR.value=TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR;
     pwm_tim1.CCER.value=0u;pwm_tim1.DIER.value=0u;pwm_tim1.SR.value=0u;
     pwm_tim1.PSC.value=BOARD_SINGLE_U ? 0u : 9u;pwm_tim1.ARR.value=BOARD_SINGLE_U ? 1800u : 1799u;pwm_tim1.CR1.value=TIM_CR1_CEN;pwm_tim1.CNT.value=0u;
@@ -149,8 +156,14 @@ static void reset(uint32_t base=0u)
 static void open_window()
 {
     natural_update();TIM1_UP_IRQHandler();
+#if BOARD_SINGLE_U
+    if (status().state==MOTOR_RUNTIME_STARTING) {
+        now_us+=1000u;natural_update();TIM1_UP_IRQHandler();
+    }
+#else
     pwm_tim1.CR1.value&=~TIM_CR1_DIR;pwm_tim1.CNT.value=1049u;
     pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();
+#endif
 }
 static void check_closed()
 {
@@ -388,18 +401,17 @@ int main()
     begin();pwm_tim1.BDTR.value&=~TIM_BDTR_MOE;pwm_tim1.SR.value|=TIM_SR_BIF;TIM1_BRK_IRQHandler();check_closed();
     // 明确拒绝旧多点入口，无论给定何种矢量。
     begin();CHECK(!board_update_scan_point({60u,60u,0u,434u},0u,1u));check_closed();
-    // 真实提交检查：迟到、下降半周期有效窗口及8us事务预算。
+    // 两个自然UEV：首个只在有效零CCR下使能，次个硬件装载U900。
     reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
-    button_steps(true,21u);button_steps(false,21u);natural_update();TIM1_UP_IRQHandler();
-    pwm_tim1.CNT.value=1790u;pwm_tim1.CR1.value|=TIM_CR1_DIR;
-    pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();CHECK(enables==1u);motor_runtime_stop();check_closed();
-    reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
-    button_steps(true,21u);button_steps(false,21u);natural_update();TIM1_UP_IRQHandler();
-    pwm_tim1.CNT.value=1500u;pwm_tim1.CR1.value|=TIM_CR1_DIR; // phase2100 too late
-    pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();CHECK(enables==0u);check_closed();
+    button_steps(true,21u);button_steps(false,21u);
+    CHECK(pwm_tim1.CCR1.value==0u && !(pwm_tim1.BDTR.value & TIM_BDTR_MOE));
+    natural_update();TIM1_UP_IRQHandler();
+    CHECK(enables==1u && active_ticks[0]==0u && pwm_tim1.CCR1.value==900u);
+    CHECK(status().state==MOTOR_RUNTIME_STARTING && !(pwm_tim1.DIER.value & TIM_DIER_CC4IE));
+    motor_runtime_stop();now_us+=1000u;natural_update();TIM1_UP_IRQHandler();check_closed();
     reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
     button_steps(true,21u);button_steps(false,21u);motor_action_t waiting;
-    CHECK(motor_runtime_read_reply(&log,&waiting));now_us=waiting.requested_us+2000u;
+    CHECK(motor_runtime_read_reply(&log,&waiting));now_us=waiting.requested_us+3000u;
     motor_runtime_check_deadline(now_us);open_window();CHECK(enables==0u);check_closed();
     // 最终事务每个寄存器访问点遇UEV/Break/排队STOP/绝对截止均不重开。
     auto prepare=[]() {
@@ -418,10 +430,11 @@ int main()
             if (kind==3u) { CHECK(!queued_stop); }
         }
     }
-    // 寄存器/时钟推进使事务超过8us时不授予持续输出。
+    // 零输出阶段无需8us软件窗口；时标读取仍限制2us不确定性，迟到500us拒绝。
     prepare();clock_step=2u;open_window();clock_step=0u;
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);motor_runtime_stop();check_closed();
     prepare();clock_step=3u;open_window();clock_step=0u;check_closed();
+    prepare();update_lag=501u;open_window();CHECK(enables==0u);check_closed();
     std::puts("PASS SINGLE_U production: 900/1800, 400ms/420ms, SSI350..400, zero/auto result, 1280 trip, inferredW, STOP/Break, one gesture, no multipoint, phase admission; no hardware");
 #elif BOARD_SCAN_ENABLED
     fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);

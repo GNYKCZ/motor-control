@@ -8,7 +8,7 @@
 static uint32_t pending_generation;
 static unsigned pending_scan_step;
 static uint16_t largest_tick, window_margin;
-static unsigned pending_phase; /**< 0无请求，1等自然UEV，2等上数共同低窗。 */
+static unsigned pending_phase; /**< 0无请求，1等零值UEV，4等单U励磁UEV；旧模式2等共同低窗、3等点提交。 */
 static bool deadline_clock_ready;
 #define PHASE_CHANNELS (TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E)
 
@@ -71,7 +71,7 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
         || (BOARD_SINGLE_U && (ticks.u!=900u || ticks.v || ticks.w || ticks.margin_ticks!=144u))) { return false; }
     board_disable_output();
     board_prepare_output_idle();
-    TIM1->CCR1=ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
+    TIM1->CCR1=BOARD_SINGLE_U ? 0u : ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
     largest_tick=(uint16_t)maximum; window_margin=ticks.margin_ticks;
     /* 在同一允许窗口的首个tick发比较事件，为IRQ进入/资格复核留出余量。
      * 不改变窗口边界；迟到仍拒绝，本次请求不等下一圈重试。 */
@@ -114,6 +114,36 @@ void TIM1_UP_IRQHandler(void)
     if ((TIM1->SR & TIM_SR_UIF)!=0u && (TIM1->DIER & TIM_DIER_UIE)!=0u) {
         TIM1->SR=~TIM_SR_UIF;
         TIM1->DIER &= ~TIM_DIER_UIE;
+#if BOARD_SINGLE_U
+        if (pending_phase==1u || pending_phase==4u) {
+            uint32_t event_us=0u;
+            if (!board_get_update_time_us(&event_us) || !board_output_is_ready()
+                || !motor_runtime_start_is_valid_at(pending_generation,board_get_time_us_locked())) {
+                motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME));
+            } else if (pending_phase==1u) {
+                /* 三路有效CCR已由本次UEV统一装入0。此时使能无励磁，再排下次硬件提交。 */
+                TIM1->BDTR |= TIM_BDTR_MOE;
+                if (!board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)) {
+                    motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+                } else {
+                    TIM1->CCR1=900u; /* 只有U从0改变；V/W始终0，避免三相混合更新事务。 */
+                    uint32_t checked_event=0u;
+                    if (!board_get_update_time_us(&checked_event) || (TIM1->SR & TIM_SR_UIF)!=0u
+                        || (int32_t)(checked_event-event_us)>4 || (int32_t)(checked_event-event_us)<-4) {
+                        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME));
+                    } else { pending_phase=4u; TIM1->DIER |= TIM_DIER_UIE; }
+                }
+            } else {
+                uint32_t now=board_get_time_us_locked();
+                if (!(TIM1->BDTR & TIM_BDTR_MOE) || !motor_runtime_commit_output_at(pending_generation,now)) {
+                    motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_INPUT));
+                } else {
+                    pending_phase=0u;
+                    motor_runtime_record_gate(true,event_us); /* 实际励磁UEV时标，而非迟到IRQ时刻。 */
+                }
+            }
+        }
+#else
         if (BOARD_SCAN_ENABLED && pending_phase==3u) {
             pending_phase=0u;
             if (!board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)
@@ -125,61 +155,19 @@ void TIM1_UP_IRQHandler(void)
             TIM1->SR=~TIM_SR_CC4IF;
             TIM1->DIER |= TIM_DIER_CC4IE;
         }
+#endif
     }
     board_leave_critical(mask);
 }
 
 /** 开门前后均要求上数共同低窗，余量来自profile；迟到直接拒绝，不等待或重试。 */
+#if !BOARD_SINGLE_U
 static bool in_start_window(void)
 {
-#if BOARD_SINGLE_U
-    uint32_t direction=TIM1->CR1 & TIM_CR1_DIR;
-    uint32_t count=TIM1->CNT;
-    if ((TIM1->CR1 & TIM_CR1_DIR)!=direction || count>1800u) { return false; }
-    uint32_t phase=direction ? 3600u-count : count;
-    return phase>=1044u && phase<=1980u;
-#else
     return (TIM1->CR1 & TIM_CR1_DIR)==0u && TIM1->CNT>largest_tick+window_margin
         && TIM1->CNT+window_margin<TIM1->ARR;
-#endif
-}
-
-#if BOARD_SINGLE_U
-/** 已持锁。共用一个新鲜时间检查输入，不在最终事务重复进入时间读取/设备检查链。 */
-static void start_single_output(void)
-{
-    uint32_t began=board_get_time_us_locked();
-    if (!board_output_is_ready()) { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); return; }
-    if (!in_start_window()) { motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW)); return; }
-    uint32_t prepared=board_get_time_us_locked();
-    if (prepared-began>=8u || motor_runtime_output_deadline_reached(prepared)) {
-        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME)); return;
-    }
-    if (!motor_runtime_commit_output_at(pending_generation,prepared)) {
-        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_INPUT)); return;
-    }
-    /* BKIN硬件仍异步生效。写MOE前再查驱动/相位，STOP IRQ在解锁后按原机制立即撤销。 */
-    if (!board_output_is_ready() || !in_start_window()) {
-        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW)); return;
-    }
-    TIM1->BDTR |= TIM_BDTR_MOE;
-    uint32_t opened=board_get_time_us_locked();
-    bool invalid_driver=!board_output_is_ready();
-    bool invalid_window=invalid_driver || !in_start_window();
-    uint32_t checked=board_get_time_us_locked();
-    bool expired=motor_runtime_output_deadline_reached(checked);
-    bool over_budget=checked-began>=8u;
-    /* 先撤销，再记录动作。预算未放宽，报告工作不挤占真实开门后检查。 */
-    if (expired || invalid_window || over_budget) { TIM1->BDTR &= ~TIM_BDTR_MOE; }
-    motor_runtime_record_gate(true,opened);
-    if (expired || invalid_window || over_budget) {
-        motor_runtime_record_gate(false,board_get_time_us_locked());
-        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE | (over_budget || expired
-            ? MOTOR_FAULT_START_TIME : MOTOR_FAULT_START_WINDOW)));
-    }
 }
 #endif
-
 void TIM1_CC_IRQHandler(void)
 {
     uint32_t mask=board_enter_critical();
@@ -189,7 +177,8 @@ void TIM1_CC_IRQHandler(void)
         if (pending_phase==2u) {
             pending_phase=0u;
 #if BOARD_SINGLE_U
-            start_single_output();
+            /* 单U不使用CC4软件开门；仅由自然UEV提交，陈旧CC4不能启动。 */
+            motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
 #else
             uint32_t transaction_started=board_get_time_us();
             motor_fault_t reject=MOTOR_FAULT_DEVICE;

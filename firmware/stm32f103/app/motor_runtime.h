@@ -98,7 +98,7 @@ bool motor_runtime_pulse(void);
 void motor_runtime_poll_button(bool pressed, uint32_t now_us);
 /** 前台周期日志资格：受保护输出状态暂停旧M3B3，真实回执用P1R2。 */
 bool motor_runtime_output_is_busy(void);
-/** board已持锁，写MOE之后/清MOE之后的设备时间标记；不证明电气边沿已被外部观测。 */
+/** board已持锁，单U自然UEV励磁时标/其他模式MOE写后/清MOE后的设备时间标记；不证明电气边沿已被外部观测。 */
 void motor_runtime_record_gate(bool opened, uint32_t now_us);
 typedef enum { MOTOR_ACTION_NONE=0, MOTOR_ACTION_REJECTED=1, MOTOR_ACTION_WAIT_START=2,
     MOTOR_ACTION_ACTIVE=3, MOTOR_ACTION_DURATION=4, MOTOR_ACTION_STOP=5, MOTOR_ACTION_FAULT=6 } motor_action_reason_t;
@@ -131,6 +131,8 @@ bool motor_runtime_restart_zero(void);
 bool motor_runtime_zero_is_ready(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
+/** 单U等待UEV时调用者持锁：只读检查本次代次、输入新鲜度和绝对期限。 */
+bool motor_runtime_start_is_valid_at(uint32_t generation, uint32_t now_us);
 /** 单U最终短事务：调用者持锁并提供刚取得的设备时间；仅查运行态/代次/资格，不读硬件或重取时间。 */
 bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */

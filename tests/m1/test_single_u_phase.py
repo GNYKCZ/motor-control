@@ -90,3 +90,36 @@ int main(void) {
 subprocess.run([str(gcc),'-O2','-Wall','-Wextra','-Werror',str(out/'clock.c'),'-o',str(out/'clock.exe')],check=True,env=env)
 subprocess.run([str(out/'clock.exe')],check=True,env=env)
 print("PASS production locked/public clock: pending UIF, 16/32bit wrap, nested IRQ state and zero extra locks")
+
+# 直接编译生产UEV时间重建：1MHz量化/回绕、迟到和跨reset快照。
+update_source=text[text.index("bool board_get_update_time_us("):text.index("/** TIM2 比较事件")]
+update_fixture=r"""#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <assert.h>
+static uint32_t first,second,reads,clock_value,clock_step;
+static uint32_t elapsed_read(void) { return reads++ ? second : first; }
+struct Timer { uint32_t unused; } timer;
+#define TIM2 (&timer)
+#define CNT unused
+static uint32_t board_get_time_us_locked(void) { uint32_t value=clock_value;clock_value+=clock_step;return value; }
+"""+update_source.replace("TIM2->CNT","elapsed_read()")+r"""
+int main(void) {
+ uint32_t event;
+ for(unsigned elapsed=0;elapsed<=501;elapsed++) for(unsigned step=0;step<=3;step++) {
+   first=second=elapsed;reads=0;clock_value=10000;clock_step=step;
+   bool ok=board_get_update_time_us(&event);
+   assert(ok==(elapsed<=500 && step<=2));
+   if(ok) assert(event==10000-elapsed);
+ }
+ first=499;second=0;reads=0;clock_step=0;assert(!board_get_update_time_us(&event));
+ first=499;second=501;reads=0;assert(!board_get_update_time_us(&event));
+ first=second=500;reads=0;clock_value=20;assert(board_get_update_time_us(&event) && event==(uint32_t)(20u-500u));
+ assert(!board_get_update_time_us(NULL));
+ return 0;
+}
+"""
+(out/'update.c').write_text(update_fixture,encoding='utf-8')
+subprocess.run([str(gcc),'-O2','-Wall','-Wextra','-Werror',str(out/'update.c'),'-o',str(out/'update.exe')],check=True,env=env)
+subprocess.run([str(out/'update.exe')],check=True,env=env)
+print("PASS production UEV time reconstruction: 500us bound, 2us uncertainty, reset race and 32bit wrap")

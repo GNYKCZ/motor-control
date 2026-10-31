@@ -122,6 +122,18 @@ bool board_start_sampling(void)
     return true;
 }
 
+bool board_get_update_time_us(uint32_t *event_us)
+{
+    if (event_us==NULL) { return false; }
+    uint32_t now=board_get_time_us_locked();
+    uint32_t elapsed=TIM2->CNT;
+    uint32_t elapsed_after=TIM2->CNT;
+    uint32_t after=board_get_time_us_locked();
+    if (after-now>2u || elapsed_after<elapsed || elapsed_after>500u) { return false; }
+    *event_us=now-elapsed;
+    return true;
+}
+
 /** TIM2 比较事件启动一帧；忙/异常不等待、不覆写半帧，锁存故障。
  * 短临界区防止 ADC 读取 completed_encoder 时被发布打断；DMA 私有缓冲无读者。 */
 static void board_start_encoder_read(void)

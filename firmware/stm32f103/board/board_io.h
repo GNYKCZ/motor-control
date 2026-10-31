@@ -42,6 +42,8 @@ bool board_start_sampling(void);
 uint32_t board_get_time_us(void);
 /** 调用者已持PRIMASK短锁，读取同一TIM4时间且保留溢出补偿；不重复屏蔽/恢复IRQ。 */
 uint32_t board_get_time_us_locked(void);
+/** 已持锁：重建最近自然UEV时间；只能在其后500us内提交启动事务。 */
+bool board_get_update_time_us(uint32_t *event_us);
 /** 初始化后启用USART2接收/错误IRQ；不发送命令、不使能输出。 */
 void board_start_serial_receive(void);
 /** 前台查询串口是否仍持有上次缓冲，true 时调用者不能修改该缓冲。 */

@@ -18,7 +18,7 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
 #if BOARD_SCAN_ENABLED
 #if BOARD_SINGLE_U
-static const pwm_profile_t local_profile = {{900u,0u,0u,144u},2000u,420000u};
+static const pwm_profile_t local_profile = {{900u,0u,0u,144u},3000u,420000u};
 #elif BOARD_ALIGNMENT_MODE == 1
 static const pwm_profile_t local_profile = {{60u,60u,0u,434u},5000u,420000u};
 #elif BOARD_ALIGNMENT_MODE == -1
@@ -308,7 +308,7 @@ bool motor_runtime_arm(unsigned profile_id)
     bool accepted=candidate!=NULL && runtime_status.state==MOTOR_RUNTIME_DISABLED && output_inputs_are_valid();
     if (accepted) {
         output_profile=candidate; output_generation++;
-        arm_deadline_us=BOARD_SINGLE_U ? last_action.requested_us+2000u : board_get_time_us()+candidate->arm_us;
+        arm_deadline_us=BOARD_SINGLE_U ? last_action.requested_us+3000u : board_get_time_us()+candidate->arm_us;
         runtime_status.state=MOTOR_RUNTIME_ARMED;
         schedule_output_deadline();
         accepted=runtime_status.state==MOTOR_RUNTIME_ARMED;
@@ -353,7 +353,7 @@ bool motor_runtime_commit_output(uint32_t generation)
     return true;
 }
 
-bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us)
+bool motor_runtime_start_is_valid_at(uint32_t generation, uint32_t now_us)
 {
     if (!BOARD_SINGLE_U || runtime_status.state!=MOTOR_RUNTIME_STARTING || generation!=output_generation
         || (int32_t)(now_us-arm_deadline_us)>=0 || (int32_t)(now_us-pulse_deadline_us)>=0
@@ -362,6 +362,12 @@ bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us)
         || !runtime_status.feedback.window_is_valid
         || now_us-runtime_status.sample.current_completed_us>BOARD_SAMPLE_GAP_LIMIT_US
         || now_us-runtime_status.feedback_completed_us>BOARD_FEEDBACK_GAP_LIMIT_US) { return false; }
+    return true;
+}
+
+bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us)
+{
+    if (!motor_runtime_start_is_valid_at(generation,now_us)) { return false; }
     runtime_status.state=MOTOR_RUNTIME_ACTIVE; return true;
 }
 

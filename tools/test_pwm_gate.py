@@ -92,17 +92,17 @@ def main():
                 if not report["candidate_derived"] or report["parameters_applied"]:
                     raise RuntimeError("single U candidate contract failed")
                 evidence["single_u"]=report
-                # 同一真实夹具/推进时钟：旧高频开门链因重复取时耗尽预算，精简路径通过。
+                # 同一硬件预装载夹具：旧CC4路径不能完成新的双UEV启动契约。
                 old_board=output/"single_u_slow_board.c"
-                old_board.write_bytes(subprocess.check_output(["git","show","d0ddf6da8ae5d9f3adf465724be2476db10f663f:firmware/stm32f103/board/board_pwm.c"],cwd=root))
+                old_board.write_bytes(subprocess.check_output(["git","show","377d8664e20052addc6c33f4dc9134625331845b:firmware/stm32f103/board/board_pwm.c"],cwd=root))
                 old_obj=output/"single_u_slow_board.o"
                 run([*cpp,"-include",model/"linkage.h","-x","c++","-c",old_board,"-o",old_obj])
                 old_exe=output/"single_u_slow.exe"
                 run([*cpp,root/"tests/m1/test_pwm_gate.cpp",old_obj,*objects,"-lm","-o",old_exe])
                 negative=subprocess.run([str(old_exe)],cwd=root,env=environment,capture_output=True,text=True,timeout=30)
                 if negative.returncode==0 or "status().state==MOTOR_RUNTIME_ACTIVE && enables==1u" not in negative.stderr:
-                    raise RuntimeError("single-U startup budget negative did not distinguish old path")
-                evidence["single_u_start_budget_negative"]={"returncode":negative.returncode,"output":negative.stdout+negative.stderr,
+                    raise RuntimeError("single-U two-update regression negative did not distinguish old path")
+                evidence["single_u_two_update_negative"]={"returncode":negative.returncode,"output":negative.stdout+negative.stderr,
                     "old_board_sha256":hashlib.sha256(old_board.read_bytes()).hexdigest()}
 
             if tag=="scan_forward":
