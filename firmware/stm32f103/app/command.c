@@ -37,6 +37,7 @@ static const uint8_t alignment_widths[28]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,
 /* 前台自动流程只安排零偏和只读报告；唯一输出入口仍在runtime的PA12手势。 */
 enum { FLOW_OFF, FLOW_WAIT, FLOW_ZERO, FLOW_READY, FLOW_FAILED, FLOW_FINISHED };
 static unsigned flow_state, flow_notice;
+static unsigned version_report; /* 0未启用、1待发送、2本启动已发送。 */
 static volatile bool flow_enabled, flow_cancelled; /* UART IRQ取消与前台准备共用，重开事务另有短锁。 */
 static bool flow_zero_pending, flow_result_pending, flow_result_seen;
 static uint8_t flow_zero_result;
@@ -78,6 +79,7 @@ void command_init(void)
     uint32_t mask=board_enter_critical();
     reset_frame(); rx_drop=false; have_sequence=false; last_sequence=0u;
     reply_pending=false; reply_building=false; reply_borrowed=false; reply_index=0u;
+    version_report=0u;
     flow_enabled=false; flow_state=FLOW_OFF; flow_notice=0u; flow_cancelled=false;
     flow_zero_pending=false; flow_result_pending=false; flow_result_seen=false;
     board_leave_critical(mask);
@@ -252,6 +254,33 @@ static char reply_character(unsigned i)
     return i==93u ? '\r' : '\n';
 }
 
+void command_enable_version_report(void)
+{
+    if (version_report==0u) { version_report=1u; }
+}
+
+static bool report_version(void)
+{
+#if defined(MOTOR_GATE_TEST_PROFILES)
+#define FIRMWARE_MODE "GATE_TEST"
+#elif defined(MOTOR_LOCAL_PULSE_BASELINE)
+#define FIRMWARE_MODE "PULSE_V_TEST"
+#elif BOARD_ALIGNMENT_MODE == 1
+#define FIRMWARE_MODE "ALIGN_POS"
+#elif BOARD_ALIGNMENT_MODE == -1
+#define FIRMWARE_MODE "ALIGN_NEG"
+#elif BOARD_SCAN_DIRECTION == -1
+#define FIRMWARE_MODE "SCAN_NEG"
+#else
+#define FIRMWARE_MODE "SCAN_POS"
+#endif
+    static const char line[]="FW1," BOARD_FIRMWARE_VERSION "," FIRMWARE_MODE "\r\n";
+    if (version_report!=1u) { return false; }
+    if (board_serial_is_busy()) { return true; }
+    if (board_start_serial_write(line,sizeof(line)-1u)) { version_report=2u; }
+    return true;
+}
+
 void command_enable_local_flow(void)
 {
     if (!BOARD_ALIGNMENT_MODE || flow_enabled) { return; }
@@ -337,7 +366,7 @@ bool command_poll(uint32_t now_us)
             reply=(reply_event_t){0u,REQUEST_SCAN_STATUS,REPLY_OK}; flow_result_pending=false; pending=true;
         }
         board_leave_critical(mask);
-        if (!pending) { return local_flow_notice(); }
+        if (!pending) { return report_version() || local_flow_notice(); }
         if (!motor_runtime_read_reply(&reply_status,&reply_action)) {
             motor_log_snapshot_t empty={0}; motor_action_t no_action={0}; reply_status=empty; reply_action=no_action; reply.result=REPLY_SNAPSHOT;
         }

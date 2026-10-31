@@ -179,3 +179,10 @@ FAILED_ZERO_INVALID、FAILED_ZERO_TIMEOUT、FAILED_STOP、ACTION_DONE、ACTION_F
 ACTION_DONE表示动作序列正常结束，不等于零位准确或标定通过。
 提示只在前台发送，无IRQ格式化或阻塞发送；周期M3B3仍5秒，动作期间继续暂停普通周期日志。
 实际新流程的板端日志与前台开销尚未实测，不能用主机测试或构建声明板端时序验收通过。
+
+## 串口版本识别
+
+当前版本标识见BOARD_FIRMWARE_VERSION与main.c文件头同值注释，采用上海时间日-时-分。
+Reset后先打开串口可见一次例如`FW1,31-13-24,ALIGN_POS`；ALIGN_NEG为另一预置侧，SCAN_POS/SCAN_NEG为七点模式。
+版本提示不带CRC，仅用于识别预期编译版本与模式，不是独立烧录读回或校准证据，不改变动作资格。
+仍需等待READY_PRESS_PA12后才能按PA12，Reset打印版本本身不触发动作。

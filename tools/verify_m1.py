@@ -24,6 +24,10 @@ def main():
     """检查实际存在、路径闭合、原字节哈希和文档链接，不读取参考目录/工具安装资料。"""
     root = Path(__file__).resolve().parents[1]
     firmware = root / "firmware/stm32f103"
+    config=(firmware / "board/board_config.h").read_text(encoding="utf-8")
+    version=re.search(r'#define BOARD_FIRMWARE_VERSION "([0-9]{2}-[0-9]{2}-[0-9]{2})"',config)
+    require(version is not None,"missing firmware version")
+    require("Firmware version: "+version[1]+" |" in (firmware / "Core/Src/main.c").read_text(encoding="utf-8"),"main.c firmware version differs from serial version")
     project = json.loads((firmware / "project_sources.json").read_text(encoding="utf-8"))
     shared_files = {root / "control_core" / (name + suffix)
                     for name in ("sensor_input", "feedback") for suffix in (".c", ".h")}

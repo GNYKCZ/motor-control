@@ -86,3 +86,7 @@ for hint in ("WAIT_STILL","COLLECT_ZERO","READY_PRESS_PA12","FAILED_INPUT","FAIL
 for raw in (b"P1F1,READY\r\n",b"P1F1,READY_PRESS_PA12\n",b"P1F1,ACTION_DONE,extra\r\n"):
     rejects(lambda: parse_line(raw))
 print("PASS automatic diagnostic hints: exact finite layout; no CRC/timestamp authority claimed")
+
+assert parse_line(b"FW1,31-13-24,ALIGN_POS\r\n")["version"]=="31-13-24"
+for raw in (b"FW1,00-13-24,ALIGN_POS\r\n",b"FW1,31-24-24,ALIGN_POS\r\n",b"FW1,31-13-60,ALIGN_POS\r\n",b"FW1,31-13-24,UNKNOWN\r\n"):
+    rejects(lambda: parse_line(raw))
