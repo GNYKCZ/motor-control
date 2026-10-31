@@ -353,6 +353,18 @@ bool motor_runtime_commit_output(uint32_t generation)
     return true;
 }
 
+bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us)
+{
+    if (!BOARD_SINGLE_U || runtime_status.state!=MOTOR_RUNTIME_STARTING || generation!=output_generation
+        || (int32_t)(now_us-arm_deadline_us)>=0 || (int32_t)(now_us-pulse_deadline_us)>=0
+        || runtime_status.fault_flags || !runtime_status.sample.is_valid
+        || !runtime_status.feedback.is_valid || !runtime_status.feedback.direct_is_valid
+        || !runtime_status.feedback.window_is_valid
+        || now_us-runtime_status.sample.current_completed_us>BOARD_SAMPLE_GAP_LIMIT_US
+        || now_us-runtime_status.feedback_completed_us>BOARD_FEEDBACK_GAP_LIMIT_US) { return false; }
+    runtime_status.state=MOTOR_RUNTIME_ACTIVE; return true;
+}
+
 bool motor_runtime_output_deadline_reached(uint32_t now_us)
 {
     return (runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)

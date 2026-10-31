@@ -3,7 +3,7 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_FIRMWARE_VERSION "31-14-10" /**< 2026-10-31 14:10，Asia/Shanghai；固件变更时更新。 */
+#define BOARD_FIRMWARE_VERSION "31-14-21" /**< 2026-10-31 14:21，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
 #define BOARD_SAMPLING_PROFILE_ID 0x00030001u /**< 20kHz PWM、175us SSI/225us ADC、1kHz原始流；单U400ms配置。 */
 /* 外设时钟/ARR/RCR/比较值只由 m1_sampling.ioc 生成，不在本头复制第二套参数。 */

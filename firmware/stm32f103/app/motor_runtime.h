@@ -131,6 +131,8 @@ bool motor_runtime_restart_zero(void);
 bool motor_runtime_zero_is_ready(void);
 /** 仅board CC4在持锁且共同低窗口内调用；代次与输入仍有效才转ACTIVE。 */
 bool motor_runtime_commit_output(uint32_t generation);
+/** 单U最终短事务：调用者持锁并提供刚取得的设备时间；仅查运行态/代次/资格，不读硬件或重取时间。 */
+bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */
 bool motor_runtime_output_deadline_reached(uint32_t now_us);
 /** UART错误/格式/CRC/超时：仅ARMED/STARTING/ACTIVE锁存通信故障并先停。 */

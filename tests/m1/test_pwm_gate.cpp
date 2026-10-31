@@ -418,7 +418,9 @@ int main()
         }
     }
     // 寄存器/时钟推进使事务超过8us时不授予持续输出。
-    prepare();clock_step=2u;open_window();clock_step=0u;check_closed();
+    prepare();clock_step=2u;open_window();clock_step=0u;
+    CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);motor_runtime_stop();check_closed();
+    prepare();clock_step=3u;open_window();clock_step=0u;check_closed();
     std::puts("PASS SINGLE_U production: 900/1800, 400ms/420ms, SSI350..400, zero/auto result, 1280 trip, inferredW, STOP/Break, one gesture, no multipoint, phase admission; no hardware");
 #elif BOARD_SCAN_ENABLED
     fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);

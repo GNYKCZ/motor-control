@@ -144,6 +144,42 @@ static bool in_start_window(void)
 #endif
 }
 
+#if BOARD_SINGLE_U
+/** 已持锁。共用一个新鲜时间检查输入，不在最终事务重复进入时间读取/设备检查链。 */
+static void start_single_output(void)
+{
+    uint32_t began=board_get_time_us();
+    if (!board_output_is_ready()) { motor_runtime_latch_fault(MOTOR_FAULT_DEVICE); return; }
+    if (!in_start_window()) { motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW)); return; }
+    uint32_t prepared=board_get_time_us();
+    if (prepared-began>=8u || motor_runtime_output_deadline_reached(prepared)) {
+        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME)); return;
+    }
+    if (!motor_runtime_commit_output_at(pending_generation,prepared)) {
+        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_INPUT)); return;
+    }
+    /* BKIN硬件仍异步生效。写MOE前再查驱动/相位，STOP IRQ在解锁后按原机制立即撤销。 */
+    if (!board_output_is_ready() || !in_start_window()) {
+        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW)); return;
+    }
+    TIM1->BDTR |= TIM_BDTR_MOE;
+    uint32_t opened=board_get_time_us();
+    bool invalid_driver=!board_output_is_ready();
+    bool invalid_window=invalid_driver || !in_start_window();
+    uint32_t checked=board_get_time_us();
+    bool expired=motor_runtime_output_deadline_reached(checked);
+    bool over_budget=checked-began>=8u;
+    /* 先撤销，再记录动作。预算未放宽，报告工作不挤占真实开门后检查。 */
+    if (expired || invalid_window || over_budget) { TIM1->BDTR &= ~TIM_BDTR_MOE; }
+    motor_runtime_record_gate(true,opened);
+    if (expired || invalid_window || over_budget) {
+        motor_runtime_record_gate(false,board_get_time_us());
+        motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE | (over_budget || expired
+            ? MOTOR_FAULT_START_TIME : MOTOR_FAULT_START_WINDOW)));
+    }
+}
+#endif
+
 void TIM1_CC_IRQHandler(void)
 {
     uint32_t mask=board_enter_critical();
@@ -152,6 +188,9 @@ void TIM1_CC_IRQHandler(void)
         TIM1->DIER &= ~TIM_DIER_CC4IE;
         if (pending_phase==2u) {
             pending_phase=0u;
+#if BOARD_SINGLE_U
+            start_single_output();
+#else
             uint32_t transaction_started=board_get_time_us();
             motor_fault_t reject=MOTOR_FAULT_DEVICE;
             /* 逗号表达式只标记当前检查阶段，保持原有短路顺序；不增加寄存器读取。 */
@@ -182,6 +221,7 @@ void TIM1_CC_IRQHandler(void)
                         : (motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW));
                 }
             } else { motor_runtime_latch_fault(reject); }
+#endif
         }
     }
     board_leave_critical(mask);
