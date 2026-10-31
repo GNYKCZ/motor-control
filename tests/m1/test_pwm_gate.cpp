@@ -3,6 +3,7 @@
 #include "linkage.h"
 #include "main.h"
 #include "board_config.h"
+#include "diag_trace.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -103,7 +104,7 @@ bool board_get_update_time_us(uint32_t *event) {
 static char scan_wire[257];
 static bool capture_flow;
 static unsigned flow_count;
-static char flow_lines[16][257];
+static char flow_lines[128][257];
 static unsigned count_flow(const char *prefix)
 {
     unsigned count=0u;
@@ -113,7 +114,7 @@ static unsigned count_flow(const char *prefix)
 bool board_serial_is_busy(void) { return false; }
 bool board_start_serial_write(const char *bytes,uint32_t length)
 { CHECK(length<=256u);std::memcpy(scan_wire,bytes,length);scan_wire[length]='\0';
-  if (capture_flow) { CHECK(flow_count<16u);std::memcpy(flow_lines[flow_count++],scan_wire,length+1u); }
+  if (capture_flow) { CHECK(flow_count<128u);std::memcpy(flow_lines[flow_count++],scan_wire,length+1u); }
   return true; }
 #else
 bool board_serial_is_busy(void) { return true; }
@@ -124,6 +125,18 @@ static motor_status_t status()
 {
     motor_status_t s;CHECK(motor_runtime_read_status(&s));return s;
 }
+/** 合成ADC完成时快照：与生产ADC IRQ同一取值顺序，但寄存器来自主机模型。 */
+static diag_irq_snapshot_t irq_snapshot(uint32_t completed_us)
+{
+    diag_irq_snapshot_t s;
+    s.before_us=completed_us;s.after_us=completed_us+1u; /* 生产顺序：完成时刻≤读前≤读后 */
+    s.tim1_cnt=(uint16_t)pwm_tim1.CNT.value;s.tim2_cnt=(uint16_t)(completed_us&0xffffu);
+    s.pins=(uint8_t)(((pwm_gpioa.IDR.value>>8u)&0x7u)
+        | (((pwm_tim1.BDTR.value&TIM_BDTR_MOE)!=0u) ? 0x8u : 0u));
+    s.dir=(uint8_t)(((pwm_tim1.CR1.value&TIM_CR1_DIR)!=0u) ? 1u : 0u);
+    s.dir_changed=0u;
+    return s;
+}
 static void sample(bool poll=true,uint16_t raw_u=2027u,uint16_t raw_v=2028u)
 {
     ++sequence;
@@ -131,6 +144,8 @@ static void sample(bool poll=true,uint16_t raw_u=2027u,uint16_t raw_v=2028u)
     e.sequence=sequence;e.raw_angle_count=fixed_angle ? fixed_count : (uint16_t)(sequence & 16383u);
     e.read_started_us=now_us-50u;e.read_completed_us=now_us-28u;e.is_valid=true;
     motor_sample_t s=board_make_sample(sequence,now_us,raw_u,raw_v,&e);
+    diag_irq_snapshot_t snapshot=irq_snapshot(now_us);
+    diag_trace_sample(&snapshot,&s); /* 与生产顺序一致：保护判定之前复制原始值。 */
     motor_runtime_handle_sample(&s);
     if (poll) { motor_runtime_poll_feedback(); }
 }
@@ -147,12 +162,17 @@ static void reset(uint32_t base=0u)
     pwm_tim1.CCER.value=0u;pwm_tim1.DIER.value=0u;pwm_tim1.SR.value=0u;
     pwm_tim1.PSC.value=BOARD_SINGLE_U ? 0u : 9u;pwm_tim1.ARR.value=BOARD_SINGLE_U ? 1800u : 1799u;pwm_tim1.CR1.value=TIM_CR1_CEN;pwm_tim1.CNT.value=0u;
     #if BOARD_DQ_CURRENT_LOOP
-    pwm_tim1.CR1.value |= TIM_CR1_CMS;pwm_tim1.RCR.value=39u;
+    /* 按生产顺序：MX_TIM1_Init只置CMS，CEN由board_start_sampling置；IDLE快照因此看到CEN=0。 */
+    pwm_tim1.CR1.value=TIM_CR1_CMS;pwm_tim1.RCR.value=39u;
     pwm_tim1.CCMR1.value=TIM_CCMR1_OC1PE | TIM_CCMR1_OC2PE;pwm_tim1.CCMR2.value=TIM_CCMR2_OC3PE;
 #endif
     pwm_tim1.CCR1.value=0u;pwm_tim1.CCR2.value=0u;pwm_tim1.CCR3.value=0u;
     pwm_gpiob.IDR.value=GPIO_PIN_12;pwm_gpioa.CRH.value=0xa5bcd222u;
-    motor_runtime_init();command_init();board_initialize_output();motor_runtime_finish_boot(true);
+    motor_runtime_init();command_init();board_initialize_output();
+    #if BOARD_DQ_CURRENT_LOOP
+    pwm_tim1.CR1.value|=TIM_CR1_CEN; /* 对应board_start_sampling；IDLE配置快照已在其之前记录。 */
+#endif
+    motor_runtime_finish_boot(true);
     for (unsigned i=0u;i<100u;++i) { now_us+=100u;sample(); }
     CHECK(status().state==MOTOR_RUNTIME_DISABLED && status().feedback.window_is_valid);
     CHECK((pwm_gpioa.CRH.value & ~0xfffu)==0xa5bcd000u);

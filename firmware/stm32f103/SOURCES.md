@@ -81,3 +81,7 @@ P1a1仅参考原USART2收发模式和H8/PA3连接事实，新增自编[command](
 [current_control](../../control_core/current_control.c)和[foc_math](../../control_core/foc_math.c)，未复制例程算法。
 外设生成配置不变；runtime拥有生命周期，board拥有三相同步预装载；详细[闭环契约与候选板验](../../docs/dq_current_loop.md)。
 正式默认零指令，软件/目标构建不替代实机跟踪、绝对电流或高阻关断验收。
+
+固定零矢量诊断新增本项目自编[diag_trace](app/diag_trace.c)：ADC完成IRQ只复制整数原始值与
+IRQ时刻引脚/定时器快照，board_pwm在四个明确阶段保存寄存器快照，停机后按序CRC导出。
+不引入第三方源码，不改变生成的外设配置，也不改变既有保护判据。

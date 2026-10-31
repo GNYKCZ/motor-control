@@ -206,3 +206,34 @@ ARM默认DQ_VEC0，cfg00040002（与闭环40001区分）；Reset只准备，PA12
 
 诊断期间不重采/应用带PWM零偏：沿用本启动GPIO低时取得的512帧基线，输出期间数据只记录。
 即使固定相同PWM下出现偏移，也不能未经区分就把它扣成零，否则可能掩盖真实相电流或驱动不对称。
+
+
+## 固定零矢量诊断的原始记录帧（新增，板端NOT RUN）
+
+在既有 P1D0/P1E1/P1D1 之后新增一段有序原始记录块，用于区分配置、引脚、采样时序与实际输出。
+新增帧仍是 `<前缀>,<8位hex>…,<CRC4>\r\n`，CRC 为 CCITT-FALSE 覆盖末 CRC 之前含最后逗号；
+最长帧为 `P1T1` 的 137B，发送缓冲 168B，低于 `BOARD_SERIAL_BUFFER_BYTES=256`。
+
+| 帧 | 字段（除前缀/CRC） | 用途 |
+|---|---|---|
+| `P1T0` | version, pre, body, total, complete, overflow, frozen, trip, first, freeze_reason, freeze_sequence, configs, generation | 头帧：分段条数与完成/溢出标志 |
+| `P1T2` | stage, generation, read_us, cr1, cr2, ccmr1, ccmr2, ccer, bdtr | 阶段控制寄存器快照 |
+| `P1T3` | stage, read_us, psc, arr, rcr, ccr1, ccr2, ccr3 | 载波与比较值（CCR是预装值） |
+| `P1T4` | stage, read_us, gpioa_crh, afio_mapr, gpioa_idr, moe, ccr_is_preload | 复用/引脚/MOE |
+| `P1T1` | index, sequence, completed, before, after, raw_u, raw_v, angle, tim1, tim2, pins, flags, dir, stage | 逐条ADC完成时原始值与时序快照 |
+| `P1T5` | actual, total, pre, body, complete, overflow | 末帧：实际导出条数 |
+
+顺序固定为 头帧 → 每个阶段 `P1T2,P1T3,P1T4` → `P1T1` 按 index 递增 → 末帧；缺帧、重复、错序或
+CRC 失败都由 `tools/dq_report.py:trace_reports` 拒绝，不自动补齐。
+
+`flags` 位：1=Runtime值域有效、2=边沿不确定（TIM1方向读前读后不同或读取跨度>2us）、
+4=动作前样本、8=停机后恢复样本。`pins` 低3位是同一次 IDR 读数里的 PA8/9/10 电平，bit3 为 MOE；
+它只表示该瞬间逻辑电平，不是 ADC 采样孔径时刻，也不证明功率端同步。阶段 `STOPPED` 的样本
+在解析器里要求三路引脚低且 MOE=0。
+
+阶段 `IDLE` 在 `board_start_sampling()` 之前记录，此时 `CR1.CEN=0` 是正确事实，解析器据此区分
+“计数器未启动”与“动作中”；只有 `ZERO`/`FIFTY` 才要求 CEN=1。停机阶段由“本代次真正开过 MOE”
+的软件标志触发，Break 硬件清 MOE 时同样留下 `STOPPED` 快照。
+
+恢复窗口固定8条1kHz样本，等待上限12ms；采样已停止时按实际条数导出并置 `complete=0`，
+不会无限等待，也不会因此延长输出或重开 MOE。记录本身不参与任何保护判据。

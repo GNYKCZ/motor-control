@@ -18,17 +18,22 @@ struct PwmRegister {
     PwmRegister &operator&=(uint32_t v) { uint32_t old=*this; return operator=(old&v); }
 };
 struct PwmTimer {
-    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR,PSC,RCR,CCMR1,CCMR2;
+    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR,PSC,RCR,CCMR1,CCMR2,CR2;
     explicit PwmTimer(bool first):BDTR(first?R_BDTR:R_OTHER),CCR1(first?R_CCR1:R_CCR31),
-        CCR2(R_CCR2),CCR3(R_CCR3),CCR4(R_CCR4),SR(first?R_SR1:R_SR3),CCER(R_CCER),EGR(R_EGR) {}
+        CCR2(R_CCR2),CCR3(R_CCR3),CCR4(R_CCR4),SR(first?R_SR1:R_SR3),CCER(R_CCER),EGR(R_EGR),
+        CR2(R_OTHER) {}
 };
 struct PwmGpio { PwmRegister CRH,BRR,IDR; PwmGpio():CRH(R_CRH) {} };
+struct PwmAfio { PwmRegister MAPR; };
+/** 单一实例由inline函数保证，历史夹具无需另加定义即可链接新board实现。 */
+inline PwmAfio &afio_model(void) { static PwmAfio instance; return instance; }
 extern PwmTimer pwm_tim1,pwm_tim3;
 extern PwmGpio pwm_gpioa,pwm_gpiob;
 #define TIM1 (&pwm_tim1)
 #define TIM3 (&pwm_tim3)
 #define GPIOA (&pwm_gpioa)
 #define GPIOB (&pwm_gpiob)
+#define AFIO (&afio_model())
 #define GPIO_PIN_8 (1u<<8)
 #define GPIO_PIN_9 (1u<<9)
 #define GPIO_PIN_10 (1u<<10)

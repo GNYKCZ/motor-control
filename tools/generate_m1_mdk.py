@@ -9,6 +9,33 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
+def compare_project(document, path):
+    """按源清单与编译/链接语义比较已存在的工程。
+    uVision每次保存/构建都会补写Utilities、SFDFile、DebugOption等IDE默认字段，
+    逐字节比对会让仓库校验在任何一次Keil构建后失效；这里只约束会影响产物的字段。"""
+    try:
+        existing = ET.parse(path).getroot()
+    except (ET.ParseError, OSError) as error:
+        raise SystemExit("MDK 工程不可解析：" + str(error))
+    checks = [("TargetName", ".//TargetName"), ("Device", ".//Device"),
+              ("OutputName", ".//OutputName"), ("OutputDirectory", ".//OutputDirectory"),
+              ("CreateHexFile", ".//CreateHexFile"),
+              ("ScatterFile", ".//LDads/ScatterFile"), ("LinkerMisc", ".//LDads/Misc"),
+              ("CDefine", ".//Cads/VariousControls/Define"),
+              ("CIncludePath", ".//Cads/VariousControls/IncludePath"),
+              ("CMiscControls", ".//Cads/VariousControls/MiscControls"),
+              ("COptim", ".//Cads/Optim"), ("C99", ".//Cads/uC99"),
+              ("AsmMiscControls", ".//Aads/VariousControls/MiscControls"),
+              ("useUlib", ".//ArmAdsMisc/useUlib")]
+    for label, query in checks:
+        if document.findtext(query) != existing.findtext(query):
+            raise SystemExit("MDK 工程与清单不一致(" + label + ")，请重新生成。")
+    expected = sorted(node.text for node in document.findall(".//FilePath"))
+    actual = sorted(node.text for node in existing.findall(".//FilePath"))
+    if expected != actual:
+        raise SystemExit("MDK 工程与清单不一致(源清单)，请重新生成。")
+
+
 def main():
     """将清单映射到 MDK 的相对路径和 ARM Compiler 6.13.1/O2/微库选项。"""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -149,8 +176,7 @@ def main():
         document, encoding="unicode", short_empty_elements=False) + "\n"
     destination = arguments.output or firmware / "MDK-ARM/m1_sampling.uvprojx"
     if arguments.check:
-        if destination.read_text(encoding="utf-8") != content:
-            raise SystemExit("MDK 工程与清单不一致，请重新生成。")
+        compare_project(document, destination)
         print("PASS MDK project/source manifest consistency")
     else:
         destination.write_bytes(content.encode("utf-8"))

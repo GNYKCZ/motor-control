@@ -46,6 +46,7 @@
     "../../control_core/sensor_input.c",
     "../../control_core/feedback.c",
     "app/current_loop.c",
+    "app/diag_trace.c",
     "../../control_core/current_control.c",
     "../../control_core/foc_math.c"
   ],

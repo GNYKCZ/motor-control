@@ -201,6 +201,10 @@ def parse_line(raw):
                 or (reason == 3 and flags != 0x80) or (reason in {4, 5, 6} and not flags & 0x40)):
             raise ValueError("P1R2 action phase contradicts timestamp flags")
         return {"format": "P1R2", **fields}
+    if re.match(rb"P1T[0-5],", raw):
+        # 原始诊断记录帧交给专用解析器，避免通用采集把它们记成无效行。
+        from dq_report import parse_trace
+        return parse_trace(raw)
     if raw.startswith(b"P1R1,"):
         # 固定56字节、CRC覆盖0..49含最后逗号；独立使用Python库，不照搬C的CRC循环。
         pattern = rb"P1R1,([0-9A-F]{8}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{2}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{8}),([0-9A-F]{4})\r\n"

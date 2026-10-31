@@ -457,6 +457,11 @@
               <FilePath>../app/current_loop.c</FilePath>
             </File>
             <File>
+              <FileName>diag_trace.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../app/diag_trace.c</FilePath>
+            </File>
+            <File>
               <FileName>current_control.c</FileName>
               <FileType>1</FileType>
               <FilePath>../../../control_core/current_control.c</FilePath>

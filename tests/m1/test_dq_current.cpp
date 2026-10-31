@@ -18,7 +18,7 @@ static void telemetry_poll_status(uint32_t) {}
 #include "dq_production_loop.h"
 #endif
 
-static void dq_prepare(uint16_t angle=7453u)
+static void dq_arm(uint16_t angle=7453u,bool break_before_release=false)
 {
     reset();fixed_angle=true;
     while (fixed_count!=angle) {
@@ -27,7 +27,14 @@ static void dq_prepare(uint16_t angle=7453u)
     for (unsigned i=0u;i<32u;++i) { current_loop_poll(); }
     CHECK(current_loop_is_ready());
     button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
-    button_steps(true,21u);button_steps(false,21u);CHECK(status().state==MOTOR_RUNTIME_STARTING);
+    button_steps(true,21u);
+    if (break_before_release) { pwm_tim1.RCR.value=3u; } /* 启动在board_prepare_pulse校验阶段就被拒。 */
+    button_steps(false,21u);
+    if (!break_before_release) { CHECK(status().state==MOTOR_RUNTIME_STARTING); }
+}
+static void dq_prepare(uint16_t angle=7453u)
+{
+    dq_arm(angle);
     open_window();CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u && early_enables==0u);
     CHECK(active_ticks[0]==900u && active_ticks[1]==900u && active_ticks[2]==900u);
 }
@@ -125,6 +132,72 @@ int main(void)
     feedback_delay=300u;production_poll_iteration();feedback_delay=0u;
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE);now_us=action.started_us+1000u;natural_update();TIM1_UP_IRQHandler();
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE);motor_runtime_stop();check_closed();
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* 原始诊断记录五条终止路径：正常截止、首次故障、STOP、Break、恢复样本缺失。
+     * 每条路径只导出一次；解析与完整性判定由tools/dq_report.py独立完成。 */
+    {
+        auto drain=[&](const char *tag,bool feed_samples) {
+            capture_flow=true;flow_count=0u;
+            for (unsigned i=0u;i<400u;++i) {
+                if (current_loop_report_poll()) { continue; }
+                now_us+=1000u;
+                if (feed_samples) { sample(); }
+            }
+            capture_flow=false;
+            std::fprintf(stderr,"DQ_TRACE_%s_BEGIN\n",tag);
+            for (unsigned i=0u;i<flow_count;++i) { std::fputs(flow_lines[i],stderr); }
+            std::fprintf(stderr,"DQ_TRACE_%s_END\n",tag);
+        };
+        auto run_20ms=[&]() {
+            motor_log_snapshot_t l;motor_action_t a;CHECK(motor_runtime_read_reply(&l,&a));
+            uint32_t ev=a.started_us;
+            for (unsigned k=0u;k<=19u;++k) {
+                timer_tick(ev+k*1000u-now_us);
+                if (k) { natural_update();TIM1_UP_IRQHandler(); }
+                timer_tick(227u);sample(true,2027u,2028u);current_loop_poll();
+            }
+        };
+        dq_prepare();run_20ms();
+        CHECK(status().state==MOTOR_RUNTIME_DISABLED && status().fault_flags==0u);
+        drain("NORMAL",true);
+        dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));
+        for (unsigned k=0u;k<4u;++k) { dq_frame(action.started_us+k*1000u); }
+        dq_frame(action.started_us+4000u,2157u,2028u);CHECK(status().state==MOTOR_RUNTIME_FAULT);
+        drain("TRIP",true);
+        dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));dq_frame(action.started_us+1000u);
+        motor_runtime_stop();CHECK(status().state==MOTOR_RUNTIME_DISABLED);
+        drain("STOP",true);
+        dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));dq_frame(action.started_us+1000u);
+        pwm_tim1.BDTR.value&=~TIM_BDTR_MOE;pwm_tim1.SR.value|=TIM_SR_BIF;TIM1_BRK_IRQHandler();
+        CHECK(status().state==MOTOR_RUNTIME_FAULT);
+        drain("BREAK",true);
+        dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));
+        for (unsigned k=0u;k<4u;++k) { dq_frame(action.started_us+k*1000u); }
+        dq_frame(action.started_us+4000u,2027u,2158u);CHECK(status().state==MOTOR_RUNTIME_FAULT);
+        drain("TRIPV",true); /* 第二类采样故障：仅V越限，首因必须是2。 */
+        dq_arm();pwm_tim1.RCR.value=3u;open_window(); /* 破坏已验收配置，启动事务必须拒绝。 */
+        CHECK(status().state==MOTOR_RUNTIME_FAULT);
+        drain("STARTFAIL",true);
+        dq_arm(7453u,true); /* 更早的拒绝点：arm之后、动作代次之前即失败，不应产生任何记录。 */
+        CHECK(status().state==MOTOR_RUNTIME_DISABLED && status().fault_flags==0u);
+        drain("NOACTION",true);
+        dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));
+        for (unsigned k=0u;k<4u;++k) { dq_frame(action.started_us+k*1000u); }
+        dq_frame(action.started_us+4000u,2157u,2028u);CHECK(status().state==MOTOR_RUNTIME_FAULT);
+        /* 恢复窗口内没有样本：超时后按实际条数导出；导出开始后才恢复采样，新样本必须被拒绝追加。 */
+        for (unsigned i=0u;i<20u;++i) { now_us+=1000u; }
+        capture_flow=true;flow_count=0u;
+        for (unsigned i=0u;i<400u;++i) {
+            if (current_loop_report_poll()) { continue; }
+            now_us+=1000u;sample();
+        }
+        capture_flow=false;
+        std::fputs("DQ_TRACE_NORECOVERY_BEGIN\n",stderr);
+        for (unsigned i=0u;i<flow_count;++i) { std::fputs(flow_lines[i],stderr); }
+        std::fputs("DQ_TRACE_NORECOVERY_END\n",stderr);
+        check_closed();
+    }
+#endif
     std::puts(BOARD_DQ_VECTOR_DIAGNOSTIC ? "PASS fixed equal-PWM diagnostic: no PI application, independent20ms deadline, biased observer, unchanged trips/STOP/Break; no closed-loop acceptance" : "PASS actual DQ runtime/board/current_control: zero and fixed signed references, four angles, bounded RL, trace, STOP/Break, mailbox overwrite, raw trip, movement, deadline, one gesture");
     return 0;
 }

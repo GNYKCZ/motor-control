@@ -5,6 +5,7 @@
 #include "main.h"
 #include "board_config.h"
 #include "current_loop.h"
+#include "diag_trace.h"
 
 static uint32_t pending_generation;
 #if BOARD_DQ_CURRENT_LOOP
@@ -14,7 +15,41 @@ static unsigned pending_scan_step;
 static uint16_t largest_tick, window_margin;
 static unsigned pending_phase; /**< 0无请求，1等零值UEV，4等单U励磁UEV；旧模式2等共同低窗、3等点提交。 */
 static bool deadline_clock_ready;
+static bool output_was_enabled; /**< 本代次是否真正开过MOE；Break会由硬件清位，不能用实时MOE判断停机阶段。 */
+static bool stop_snapshot_needed; /**< 启动已发起但尚未通过校验：失败时也要留下停机配置快照。 */
 #define PHASE_CHANNELS (TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E)
+
+/** 阶段配置快照：寄存器在此读取后交给记录模块，记录本身不访问设备。
+ * CCR是预装寄存器值；该阶段是否已装入有效比较值由ccr_is_preload单独标注。 */
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+static void record_config(unsigned stage,uint32_t generation,uint8_t ccr_is_preload)
+{
+    diag_config_t config;
+    config.generation=generation;
+    config.cr1=(uint16_t)TIM1->CR1;
+    config.cr2=(uint16_t)TIM1->CR2;
+    config.ccmr1=(uint16_t)TIM1->CCMR1;
+    config.ccmr2=(uint16_t)TIM1->CCMR2;
+    config.ccer=(uint16_t)TIM1->CCER;
+    config.bdtr=(uint16_t)TIM1->BDTR;
+    config.psc=(uint16_t)TIM1->PSC;
+    config.arr=(uint16_t)TIM1->ARR;
+    config.rcr=(uint16_t)TIM1->RCR;
+    config.ccr1=(uint16_t)TIM1->CCR1;
+    config.ccr2=(uint16_t)TIM1->CCR2;
+    config.ccr3=(uint16_t)TIM1->CCR3;
+    config.gpioa_crh=GPIOA->CRH;
+    config.afio_mapr=AFIO->MAPR;
+    config.gpioa_idr=GPIOA->IDR;
+    config.read_us=board_get_time_us();
+    config.stage=(uint8_t)stage;
+    config.ccr_is_preload=ccr_is_preload;
+    diag_trace_config(&config);
+}
+#else
+/** 非固定零矢量诊断构建不付寄存器快照成本；调用点保持同一形状。 */
+#define record_config(stage,generation,preload) ((void)(stage),(void)(generation),(void)(preload))
+#endif
 
 void board_disable_output(void)
 {
@@ -22,14 +57,22 @@ void board_disable_output(void)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_TIM1_CLK_ENABLE();
     bool had_request=pending_phase!=0u || (TIM1->BDTR & TIM_BDTR_MOE)!=0u;
+    bool was_outputting=output_was_enabled; /* Break已由硬件清MOE，只有软件标志能证明曾输出。 */
+    bool was_starting=stop_snapshot_needed; /* 启动已发起但在校验阶段被拒：同样要留快照。 */
+    output_was_enabled=false;
+    stop_snapshot_needed=false;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
     if (had_request && deadline_clock_ready) { motor_runtime_record_gate(false,board_get_time_us()); }
+    uint32_t stopped_generation=pending_generation;
     pending_phase=0u;
     TIM1->DIER &= ~(TIM_DIER_UIE | TIM_DIER_CC4IE);
     /* CCxE仍保持idle低，先接管GPIO再关通道，避免AF无驱动窗口。 */
     GPIOA->BRR=GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
     GPIOA->CRH=(GPIOA->CRH & ~0xfffu) | 0x222u;
     TIM1->CCER=0u;
+    if ((had_request || was_outputting || was_starting) && deadline_clock_ready) {
+        record_config(DIAG_STAGE_STOPPED,stopped_generation,1u);
+    }
     board_leave_critical(mask);
 }
 
@@ -41,6 +84,8 @@ void board_prepare_output_idle(void)
 
 void board_initialize_output(void)
 {
+    output_was_enabled=false; /* 初始化不得沿用上一会话的“开过MOE”标志。 */
+    stop_snapshot_needed=false;
     board_disable_output();
     TIM1->SR=~TIM_SR_BIF;
     TIM1->DIER |= TIM_DIER_BIE;
@@ -49,6 +94,7 @@ void board_initialize_output(void)
     TIM3->DIER=0u;
     TIM3->CR1 |= TIM_CR1_CEN;
     deadline_clock_ready=true;
+    record_config(DIAG_STAGE_IDLE,0u,0u); /* 启动初始化后的空闲配置基线。 */
 }
 
 bool board_output_is_ready(void)
@@ -72,12 +118,15 @@ bool board_output_is_ready(void)
 
 bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
 {
+    /* 启动已发起：即使在本函数校验阶段被拒，后续停机也要留下能显示坏配置的快照。 */
+    stop_snapshot_needed=true;
     uint32_t maximum=ticks.u;
     if (ticks.v>maximum) { maximum=ticks.v; }
     if (ticks.w>maximum) { maximum=ticks.w; }
     if (!board_output_is_ready() || ticks.margin_ticks==0u
         || maximum+2u*ticks.margin_ticks>=TIM1->ARR || TIM1->ARR!=(BOARD_SINGLE_U ? 1800u : 1799u)
         || (BOARD_SINGLE_U && (ticks.u!=900u || ticks.v!=(BOARD_DQ_CURRENT_LOOP ? 900u : 0u) || ticks.w!=(BOARD_DQ_CURRENT_LOOP ? 900u : 0u) || ticks.margin_ticks!=144u))) { return false; }
+    stop_snapshot_needed=false; /* 这里的清场不是停机，不应产生STOPPED快照。 */
     board_disable_output();
     board_prepare_output_idle();
     TIM1->CCR1=BOARD_SINGLE_U ? 0u : ticks.u; TIM1->CCR2=BOARD_SINGLE_U ? 0u : ticks.v; TIM1->CCR3=BOARD_SINGLE_U ? 0u : ticks.w;
@@ -143,6 +192,7 @@ void TIM1_UP_IRQHandler(void)
             } else if (pending_phase==1u) {
                 /* 三路有效CCR已由本次UEV统一装入0。此时使能无励磁，再排下次硬件提交。 */
                 TIM1->BDTR |= TIM_BDTR_MOE;
+                output_was_enabled=true;
                 if (!board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)) {
                     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
                 } else {
@@ -154,7 +204,8 @@ void TIM1_UP_IRQHandler(void)
                     if (!board_get_update_time_us(&checked_event) || (TIM1->SR & TIM_SR_UIF)!=0u
                         || (int32_t)(checked_event-event_us)>4 || (int32_t)(checked_event-event_us)<-4) {
                         motor_runtime_latch_fault((motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME));
-                    } else { pending_phase=4u; TIM1->DIER |= TIM_DIER_UIE; }
+                    } else { pending_phase=4u; TIM1->DIER |= TIM_DIER_UIE;
+                        record_config(DIAG_STAGE_ZERO,pending_generation,1u); }
                 }
             } else {
                 uint32_t now=board_get_time_us_locked();
@@ -163,6 +214,7 @@ void TIM1_UP_IRQHandler(void)
                 } else {
                     pending_phase=0u;
                     motor_runtime_record_gate(true,event_us); /* 实际励磁UEV时标，而非迟到IRQ时刻。 */
+                    record_config(DIAG_STAGE_FIFTY,pending_generation,0u); /* 本次UEV已装入三路900。 */
                 }
             }
         }

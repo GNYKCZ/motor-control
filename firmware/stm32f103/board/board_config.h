@@ -3,7 +3,7 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_FIRMWARE_VERSION "31-22-40" /**< 2026-10-31 22:40，Asia/Shanghai；固件变更时更新。 */
+#define BOARD_FIRMWARE_VERSION "01-00-03" /**< 2026-11-01 00:03，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
 #define BOARD_SAMPLING_PROFILE_ID 0x00030001u /**< 20kHz PWM、175us SSI/225us ADC、1kHz原始流；单U400ms配置。 */
 /* 正式ARM默认零指令电流闭环；历史host夹具显式测试旧流程，新夹具用-D启用本路径。 */

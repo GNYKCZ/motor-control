@@ -4,6 +4,7 @@
 #include "board_io.h"
 #include "board_config.h"
 #include "motor_runtime.h"
+#include "diag_trace.h"
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -39,6 +40,7 @@ void current_loop_init(void)
     maximum_compute=maximum_latency=action_start=requested_sequence=0u;offset=(sensor_offset_t){0};
     queued=inflight=benchmark_failed=false;header_pending=true;trip_pending=false;first_trip.reason=0u;
     state=(current_control_state_t){0};pending_state=state;
+    diag_trace_init(); /* 诊断记录与闭环状态同源复位，不跨启动沿用旧证据。 */
 }
 bool current_loop_timing_failed(void) { return benchmark_failed; }
 bool current_loop_is_ready(void) { return benchmark_step==32u && !benchmark_failed
@@ -48,11 +50,13 @@ void current_loop_begin(uint32_t next_generation,sensor_offset_t next_offset)
 {
     generation=next_generation;offset=next_offset;used=exported=0u;last_sequence=last_sample_us=0u;
     action_start=0u;queued=inflight=false;trip_pending=false;first_trip.reason=0u;state=(current_control_state_t){0};pending_state=state;
+    diag_trace_begin(next_generation); /* 冻结动作前样本，启动/动作段从此开始记录。 */
 }
 void current_loop_abort(void)
 {
     bool had_request=generation!=0u || queued || inflight;
     generation=0u;queued=inflight=false;state=(current_control_state_t){0};pending_state=state;
+    diag_trace_stop(); /* 安排有限恢复窗口；不恢复输出，不清除已记录证据。 */
     if (had_request) { header_pending=true; } /* 后续FAULT采样不能反复抢占有限记录导出。 */
 }
 void current_loop_capture_trip(unsigned reason,const motor_sample_t *sample,int32_t detail)
@@ -63,6 +67,7 @@ void current_loop_capture_trip(unsigned reason,const motor_sample_t *sample,int3
         first_trip.reason=reason;first_trip.sequence=sample->sequence;first_trip.t=sample->current_completed_us;
         first_trip.u=sample->raw_current_u_count;first_trip.v=sample->raw_current_v_count;
         first_trip.angle=sample->encoder.raw_angle_count;first_trip.detail=detail;trip_pending=true;
+        diag_trace_freeze(reason,sample->sequence); /* 首次保护只冻结一次，后续故障采样不改记录。 */
     }
     board_leave_critical(mask);
 }
@@ -174,7 +179,7 @@ static void word(uint32_t value)
 bool current_loop_report_poll(void)
 {
     if (motor_runtime_output_is_busy() || board_serial_is_busy()) { return false; }
-    if (!header_pending && !trip_pending && exported>=used) { return false; }
+    if (!header_pending && !trip_pending && exported>=used && !diag_trace_pending()) { return false; }
     bool sending_header=header_pending,sending_trip=!sending_header && trip_pending;
     line_length=5u;
     if (sending_header) {
@@ -187,6 +192,9 @@ bool current_loop_report_poll(void)
     } else if (sending_trip) {
         memcpy(line,"P1E1,",5u);word(first_trip.reason);word(first_trip.sequence);word(first_trip.t);
         word(first_trip.u);word(first_trip.v);word(first_trip.angle);word((uint32_t)first_trip.detail);
+    } else if (exported>=used) {
+        /* 既有P1D0/P1E1/P1D1布局与顺序不变；原始诊断记录在四点之后独立成块。 */
+        return diag_trace_report_poll();
     } else {
         loop_point_t point=points[exported];memcpy(line,"P1D1,",5u);word(exported);word(point.sequence);word(point.t);
         word((uint32_t)(int32_t)point.reference);word((uint32_t)(int32_t)point.id);word((uint32_t)(int32_t)point.iq);

@@ -5,6 +5,7 @@
 #include "board_config.h"
 #include "sample_frame.h"
 #include "motor_runtime.h"
+#include "diag_trace.h"
 #include "main.h"
 #include "adc.h"
 #include <stddef.h>
@@ -196,6 +197,26 @@ void DMA1_Channel2_IRQHandler(void)
     board_leave_critical(previous_mask);
 }
 
+/** ADC完成IRQ内的引脚/定时器快照：同一IDR读数取三路电平，方向读前读后各一次。
+ * 只是IRQ读取时刻的观测，不冒充ADC采样孔径或功率端同步；调用有界、无等待。 */
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+static diag_irq_snapshot_t capture_irq_snapshot(void)
+{
+    diag_irq_snapshot_t snapshot;
+    snapshot.before_us=board_get_time_us();
+    uint32_t direction_before=TIM1->CR1 & TIM_CR1_DIR;
+    snapshot.tim1_cnt=(uint16_t)TIM1->CNT;
+    snapshot.tim2_cnt=(uint16_t)TIM2->CNT;
+    snapshot.pins=(uint8_t)(((GPIOA->IDR >> 8u) & 0x7u)
+        | (((TIM1->BDTR & TIM_BDTR_MOE)!=0u) ? 0x8u : 0u));
+    uint32_t direction_after=TIM1->CR1 & TIM_CR1_DIR;
+    snapshot.after_us=board_get_time_us();
+    snapshot.dir=(uint8_t)(direction_after!=0u ? 1u : 0u);
+    snapshot.dir_changed=(direction_before!=direction_after) ? 1u : 0u;
+    return snapshot;
+}
+#endif
+
 /** 双 ADC IRQ：两个 JEOC 都存在才读取 JDR1 并发布一个完整包。
  * 只调用有界整数校验/runtime；不做 FOC，不格式化、不发送、不等待另一路 ADC。 */
 void ADC1_2_IRQHandler(void)
@@ -208,6 +229,10 @@ void ADC1_2_IRQHandler(void)
         motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
         return;
     }
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* 完整帧确认后再取快照：仍在nFault/相位/runtime保护判定与handle_sample之前。 */
+    diag_irq_snapshot_t irq_snapshot = capture_irq_snapshot();
+#endif
     GPIOA->BSRR = GPIO_PIN_4;
     if ((GPIOB->IDR & GPIO_PIN_12) == 0u) {
         motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
@@ -224,6 +249,9 @@ void ADC1_2_IRQHandler(void)
     sample_sequence++;
     motor_sample_t sample = board_make_sample(sample_sequence, completed_us,
         (uint16_t)ADC1->JDR1, (uint16_t)ADC2->JDR1, &encoder);
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    diag_trace_sample(&irq_snapshot, &sample); /* 保护判定之前只复制整数原始值。 */
+#endif
     motor_runtime_handle_sample(&sample);
 }
 

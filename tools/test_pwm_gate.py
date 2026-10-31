@@ -22,7 +22,7 @@ def main():
     environment = os.environ.copy()
     environment["PATH"] = str(gcc.parent) + os.pathsep + environment.get("PATH", "")
     model = root / "tests/m1/pwm_model"
-    c_sources = [fw / p for p in ("app/motor_runtime.c", "app/command.c", "board/sample_frame.c")]
+    c_sources = [fw / p for p in ("app/motor_runtime.c", "app/command.c", "app/diag_trace.c", "board/sample_frame.c")]
     c_sources += [root / "control_core" / (n + ".c") for n in ("feedback", "sensor_input")]
     inputs = c_sources + [fw / "board/board_pwm.c", root / "tests/m1/test_pwm_gate.cpp", Path(__file__).resolve()]
     inputs += list(model.glob("*.h")) + list((fw / "app").glob("*.h")) + list((fw / "board").glob("*.h"))
