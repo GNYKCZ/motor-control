@@ -3,30 +3,31 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_FIRMWARE_VERSION "31-13-31" /**< 2026-10-31 13:31，Asia/Shanghai；固件变更时更新。 */
+#define BOARD_FIRMWARE_VERSION "31-14-10" /**< 2026-10-31 14:10，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
-#define BOARD_SAMPLING_PROFILE_ID 0x00020001u /**< 标定配置：2kHz PWM、TIM2延时ADC、1kHz原始流。 */
+#define BOARD_SAMPLING_PROFILE_ID 0x00030001u /**< 20kHz PWM、175us SSI/225us ADC、1kHz原始流；单U400ms配置。 */
 /* 外设时钟/ARR/RCR/比较值只由 m1_sampling.ioc 生成，不在本头复制第二套参数。 */
 #define BOARD_ENCODER_TRANSFER_LIMIT_US 40u /**< 24 bit / 1.125 MHz 约 21.34 us，40 us 为软件上限。 */
 #define BOARD_ENCODER_AGE_LIMIT_US 200u     /**< 从读取开始到 ADC 完成的最大年龄，未实测。 */
-#define BOARD_SAMPLE_GAP_LIMIT_US 3000u     /**< 测试配置正常约 999.44 us；超出即判输入失步。 */
+#define BOARD_SAMPLE_GAP_LIMIT_US 3000u     /**< 当前配置正常1000 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 10000u   /**< 测试配置首个完整有效帧最多等待 10 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 5000u     /**< 前台每5秒尝试导出一次；不影响采样或命令回执。 */
-/* Keil默认+1：当前正侧两点对齐；0显式保留七点，-1为另一预置侧。串口不能选择。 */
+/* Keil默认2：单U50%/400ms；0/±1仅用于显式历史模式。串口不能选择。 */
 #ifndef BOARD_ALIGNMENT_MODE
 #if defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE)
 #define BOARD_ALIGNMENT_MODE 0
 #else
-#define BOARD_ALIGNMENT_MODE 1
+#define BOARD_ALIGNMENT_MODE 2
 #endif
 #endif
-#if BOARD_ALIGNMENT_MODE != 0 && BOARD_ALIGNMENT_MODE != 1 && BOARD_ALIGNMENT_MODE != -1
-#error "Alignment mode must be 0, +1 or -1"
+#if BOARD_ALIGNMENT_MODE != 0 && BOARD_ALIGNMENT_MODE != 1 && BOARD_ALIGNMENT_MODE != -1 && BOARD_ALIGNMENT_MODE != 2
+#error "Alignment mode must be 0, +1, -1 or 2 (single U)"
 #endif
 #if BOARD_ALIGNMENT_MODE && (defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE))
 #error "Alignment cannot use host-only legacy profiles"
 #endif
-#define BOARD_SEQUENCE_POINTS (BOARD_ALIGNMENT_MODE ? 2u : 7u)
+#define BOARD_SINGLE_U (BOARD_ALIGNMENT_MODE == 2)
+#define BOARD_SEQUENCE_POINTS (BOARD_SINGLE_U ? 1u : (BOARD_ALIGNMENT_MODE ? 2u : 7u))
 #define BOARD_SEQUENCE_LIMIT_US (BOARD_ALIGNMENT_MODE ? 420000u : 1420000u)
 #ifndef BOARD_SCAN_DIRECTION
 #define BOARD_SCAN_DIRECTION 1 /**< 编译期方向，反向构建显式设-1；串口不可改变。 */

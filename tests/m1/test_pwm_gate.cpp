@@ -12,6 +12,7 @@ PwmGpio pwm_gpioa,pwm_gpiob;
 static uint32_t now_us,mask,sequence,clock_step;
 static uint32_t active_ticks[3];
 static bool fixed_angle, delay_after_moe;
+bool board_sampling_phase_is_ready(void) { return true; }
 static uint16_t fixed_count;
 static unsigned access_count,inject_at,inject_kind,enables,early_enables,ug_writes;
 static uint32_t forced_deadline;
@@ -22,7 +23,7 @@ static unsigned advancing_ticks, fraction_ticks;
 static void advance_timer(unsigned ticks)
 {
     for (unsigned i=0u;i<ticks;++i) {
-        fraction_ticks+=10u; /* PSC9：一个TIM1 tick占10个72MHz周期。 */
+        fraction_ticks+=(BOARD_SINGLE_U ? 1u : 10u); /* PSC9：一个TIM1 tick占10个72MHz周期。 */
         if (fraction_ticks>=72u) { fraction_ticks-=72u; ++now_us; }
         if (pwm_tim1.CR1.value & TIM_CR1_DIR) {
             if (pwm_tim1.CNT.value>0u) { --pwm_tim1.CNT.value; }
@@ -65,6 +66,8 @@ void pwm_model_written(unsigned id, uint32_t value)
         if (active_ticks[0]!=100u || active_ticks[1]!=200u || active_ticks[2]!=300u
 #elif defined(MOTOR_LOCAL_PULSE_BASELINE)
         if (active_ticks[0]!=0u || active_ticks[1]!=60u || active_ticks[2]!=0u
+#elif BOARD_SINGLE_U
+        if (active_ticks[0]!=900u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #elif BOARD_ALIGNMENT_MODE == 1
         if (active_ticks[0]!=60u || active_ticks[1]!=60u || active_ticks[2]!=0u
 #elif BOARD_ALIGNMENT_MODE == -1
@@ -72,7 +75,7 @@ void pwm_model_written(unsigned id, uint32_t value)
 #else
         if (active_ticks[0]!=60u || active_ticks[1]!=0u || active_ticks[2]!=0u
 #endif
-            || pwm_tim1.CNT.value<=300u || (pwm_tim1.CR1.value & TIM_CR1_DIR)) { ++early_enables; }
+            || pwm_tim1.CNT.value<=300u || (!BOARD_SINGLE_U && (pwm_tim1.CR1.value & TIM_CR1_DIR))) { ++early_enables; }
         if (delay_after_moe) { pwm_tim1.CNT.value=1700u; }
     }
     if (id==R_CRH && (value & 0xfffu)==0xaaau) {
@@ -134,7 +137,7 @@ static void reset(uint32_t base=0u)
     clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
     pwm_tim1.BDTR.value=TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR;
     pwm_tim1.CCER.value=0u;pwm_tim1.DIER.value=0u;pwm_tim1.SR.value=0u;
-    pwm_tim1.ARR.value=1799u;pwm_tim1.CR1.value=TIM_CR1_CEN;pwm_tim1.CNT.value=0u;
+    pwm_tim1.PSC.value=BOARD_SINGLE_U ? 0u : 9u;pwm_tim1.ARR.value=BOARD_SINGLE_U ? 1800u : 1799u;pwm_tim1.CR1.value=TIM_CR1_CEN;pwm_tim1.CNT.value=0u;
     pwm_tim1.CCR1.value=0u;pwm_tim1.CCR2.value=0u;pwm_tim1.CCR3.value=0u;
     pwm_gpiob.IDR.value=GPIO_PIN_12;pwm_gpioa.CRH.value=0xa5bcd222u;
     motor_runtime_init();command_init();board_initialize_output();motor_runtime_finish_boot(true);
@@ -191,6 +194,11 @@ int main()
     (void)count_flow;
 #endif
     reset();
+#ifdef TEST_TIMER_CONFIGURATION_GUARD
+    CHECK(board_output_is_ready());
+    pwm_tim1.PSC.value=BOARD_SINGLE_U ? 9u : 0u;pwm_tim1.ARR.value=BOARD_SINGLE_U ? 1799u : 1800u;
+    CHECK(!board_output_is_ready());check_closed();reset();
+#endif
 #if defined(MOTOR_LOCAL_PULSE_BASELINE)
     // 完整低频零偏批：显式重开不使能，512个1ms样本，时间窗/整数和独立核对。
     still_ready();CHECK(motor_runtime_restart_zero());unsigned zero_enables=enables;
@@ -336,6 +344,82 @@ int main()
     button_steps(true,21u);button_steps(false,21u);open_window();check_closed();
     CHECK(motor_runtime_read_reply(&log,&action) && action.id==1u && action.reason==MOTOR_ACTION_REJECTED);
     std::puts("PASS production: local released gesture only, one attempt/boot, twenty-ms deadline and valid action timestamps");
+#elif BOARD_SINGLE_U
+    auto begin=[]() {
+        reset(0xfff00000u);fixed_angle=true;capture_flow=true;
+        command_enable_version_report();command_enable_local_flow();
+        automatic_steps(false,1100u);CHECK(motor_runtime_zero_is_ready() && enables==0u);
+        automatic_steps(true,21u);automatic_steps(false,21u);open_window();
+        CHECK(status().state==MOTOR_RUNTIME_ACTIVE && enables==1u);
+        CHECK(active_ticks[0]==900u && active_ticks[1]==0u && active_ticks[2]==0u);
+    };
+    motor_log_snapshot_t log;motor_scan_snapshot_t scan;
+    begin();
+    for (unsigned i=0u;i<349u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=15u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==0u);
+    fixed_count=0u;
+    for (unsigned i=0u;i<49u;++i) { now_us+=1000u;sample(); }
+    now_us+=1000u;fixed_count=14u;sample();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.done && scan.mask==1u && scan.point[0].count==50u && scan.point[0].sum==14);
+    check_closed();automatic_steps(false,80u);
+    CHECK(count_flow("P1A3,00000000,08,")==1u && count_flow("P1F1,ACTION_DONE")==1u);
+    for (unsigned i=0u;i<flow_count;++i) { std::fputs(flow_lines[i],stdout); }
+    automatic_steps(true,21u);automatic_steps(false,21u);CHECK(enables==1u);
+    begin();for (unsigned i=0u;i<399u;++i) { now_us+=1000u;sample(); }
+    now_us+=1028u;fixed_count=15u;sample();check_closed();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==49u && scan.point[0].sum==0);
+    begin();for (unsigned i=0u;i<350u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<25u;++i) { now_us+=2000u;sample(); }check_closed();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==7u && !scan.done);
+    begin();for (unsigned i=0u;i<350u;++i) { now_us+=1000u;sample(); }
+    for (unsigned i=0u;i<64u;++i) { now_us+=100u;sample(); }
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.point[0].count==64u);
+    now_us+=100u;sample();check_closed();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==8u);
+    begin();now_us+=1000u;sample(true,3307u,2028u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+    now_us+=1000u;sample(true,3308u,2028u);check_closed();
+    CHECK(motor_runtime_read_scan(&log,&scan) && scan.reason==5u);
+    begin();now_us+=1000u;sample(true,2800u,2800u);check_closed(); // inferred W exceeds1280
+    begin();now_us+=1000u;fixed_count=4000u;sample();check_closed();
+    begin();motor_runtime_stop();check_closed();automatic_steps(false,80u);
+    CHECK(count_flow("P1F1,ACTION_FAILED")==1u);
+    begin();pwm_tim1.BDTR.value&=~TIM_BDTR_MOE;pwm_tim1.SR.value|=TIM_SR_BIF;TIM1_BRK_IRQHandler();check_closed();
+    // 明确拒绝旧多点入口，无论给定何种矢量。
+    begin();CHECK(!board_update_scan_point({60u,60u,0u,434u},0u,1u));check_closed();
+    // 真实提交检查：迟到、下降半周期有效窗口及8us事务预算。
+    reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);natural_update();TIM1_UP_IRQHandler();
+    pwm_tim1.CNT.value=1790u;pwm_tim1.CR1.value|=TIM_CR1_DIR;
+    pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();CHECK(enables==1u);motor_runtime_stop();check_closed();
+    reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);natural_update();TIM1_UP_IRQHandler();
+    pwm_tim1.CNT.value=1500u;pwm_tim1.CR1.value|=TIM_CR1_DIR; // phase2100 too late
+    pwm_tim1.SR.value|=TIM_SR_CC4IF;TIM1_CC_IRQHandler();CHECK(enables==0u);check_closed();
+    reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());button_steps(false,512u);
+    button_steps(true,21u);button_steps(false,21u);motor_action_t waiting;
+    CHECK(motor_runtime_read_reply(&log,&waiting));now_us=waiting.requested_us+2000u;
+    motor_runtime_check_deadline(now_us);open_window();CHECK(enables==0u);check_closed();
+    // 最终事务每个寄存器访问点遇UEV/Break/排队STOP/绝对截止均不重开。
+    auto prepare=[]() {
+        reset();fixed_angle=true;button_steps(false,300u);CHECK(motor_runtime_restart_zero());
+        button_steps(false,512u);button_steps(true,21u);button_steps(false,21u);
+    };
+    prepare();trace=true;access_count=0u;open_window();trace=false;
+    unsigned single_accesses=access_count;CHECK(single_accesses>10u);motor_runtime_stop();check_closed();
+    for (unsigned kind=1u;kind<=4u;++kind) {
+        for (unsigned at=1u;at<=single_accesses;++at) {
+            prepare();motor_action_t action;CHECK(motor_runtime_read_reply(&log,&action));
+            forced_deadline=action.requested_us+420000u;
+            trace=true;access_count=0u;inject_kind=kind;inject_at=at;open_window();trace=false;
+            if (kind == 2u) { TIM1_BRK_IRQHandler(); }
+            motor_runtime_stop();check_closed();CHECK(enables<=1u);
+            if (kind==3u) { CHECK(!queued_stop); }
+        }
+    }
+    // 寄存器/时钟推进使事务超过8us时不授予持续输出。
+    prepare();clock_step=2u;open_window();clock_step=0u;check_closed();
+    std::puts("PASS SINGLE_U production: 900/1800, 400ms/420ms, SSI350..400, zero/auto result, 1280 trip, inferredW, STOP/Break, one gesture, no multipoint, phase admission; no hardware");
 #elif BOARD_SCAN_ENABLED
     fixed_angle=true;button_steps(false,300u);button_steps(true,21u);button_steps(false,21u);
     open_window();check_closed();CHECK(enables==0u); /* 未显式零偏不得启动长扫描。 */

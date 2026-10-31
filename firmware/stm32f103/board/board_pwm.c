@@ -49,7 +49,13 @@ void board_initialize_output(void)
 
 bool board_output_is_ready(void)
 {
-    return deadline_clock_ready && (GPIOB->IDR & GPIO_PIN_12)!=0u
+    bool timing_ready;
+#if BOARD_SINGLE_U
+    timing_ready=TIM1->PSC==0u && TIM1->ARR==1800u && board_sampling_phase_is_ready();
+#else
+    timing_ready=TIM1->PSC==9u && TIM1->ARR==1799u;
+#endif
+    return timing_ready && deadline_clock_ready && (GPIOB->IDR & GPIO_PIN_12)!=0u
         && (TIM1->SR & TIM_SR_BIF)==0u && (TIM1->CR1 & TIM_CR1_CEN)!=0u
         && (TIM1->BDTR & (TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR | TIM_BDTR_AOE | TIM_BDTR_BKP))
             == (TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR);
@@ -61,7 +67,8 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
     if (ticks.v>maximum) { maximum=ticks.v; }
     if (ticks.w>maximum) { maximum=ticks.w; }
     if (!board_output_is_ready() || ticks.margin_ticks==0u
-        || maximum+2u*ticks.margin_ticks>=TIM1->ARR || TIM1->ARR!=1799u) { return false; }
+        || maximum+2u*ticks.margin_ticks>=TIM1->ARR || TIM1->ARR!=(BOARD_SINGLE_U ? 1800u : 1799u)
+        || (BOARD_SINGLE_U && (ticks.u!=900u || ticks.v || ticks.w || ticks.margin_ticks!=144u))) { return false; }
     board_disable_output();
     board_prepare_output_idle();
     TIM1->CCR1=ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
@@ -80,6 +87,7 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
 
 bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsigned step)
 {
+    if (BOARD_SINGLE_U) { board_disable_output(); return false; }
     /* 调用者已持runtime锁。影子寄存器不同步写不是原子提交：检测写间UEV，不能洗掉标志。 */
     uint32_t high=(ticks.u==60u)+(ticks.v==60u)+(ticks.w==60u);
     if ((BOARD_ALIGNMENT_MODE && (step!=1u || ticks.u!=60u || ticks.v!=0u || ticks.w!=0u))
@@ -124,8 +132,16 @@ void TIM1_UP_IRQHandler(void)
 /** 开门前后均要求上数共同低窗，余量来自profile；迟到直接拒绝，不等待或重试。 */
 static bool in_start_window(void)
 {
+#if BOARD_SINGLE_U
+    uint32_t direction=TIM1->CR1 & TIM_CR1_DIR;
+    uint32_t count=TIM1->CNT;
+    if ((TIM1->CR1 & TIM_CR1_DIR)!=direction || count>1800u) { return false; }
+    uint32_t phase=direction ? 3600u-count : count;
+    return phase>=1044u && phase<=1980u;
+#else
     return (TIM1->CR1 & TIM_CR1_DIR)==0u && TIM1->CNT>largest_tick+window_margin
         && TIM1->CNT+window_margin<TIM1->ARR;
+#endif
 }
 
 void TIM1_CC_IRQHandler(void)
@@ -136,19 +152,22 @@ void TIM1_CC_IRQHandler(void)
         TIM1->DIER &= ~TIM_DIER_CC4IE;
         if (pending_phase==2u) {
             pending_phase=0u;
+            uint32_t transaction_started=board_get_time_us();
             motor_fault_t reject=MOTOR_FAULT_DEVICE;
             /* 逗号表达式只标记当前检查阶段，保持原有短路顺序；不增加寄存器读取。 */
             if (board_output_is_ready()
                 && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW),in_start_window())
                 && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_INPUT),motor_runtime_commit_output(pending_generation))
                 && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_WINDOW),in_start_window())
-                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME),!motor_runtime_output_deadline_reached(board_get_time_us()))) {
+                && (reject=(motor_fault_t)(MOTOR_FAULT_DEVICE|MOTOR_FAULT_START_TIME),!motor_runtime_output_deadline_reached(board_get_time_us()))
+                && (!BOARD_SINGLE_U || board_get_time_us()-transaction_started<8u)) {
                 TIM1->BDTR |= TIM_BDTR_MOE;
                 uint32_t opened_us=board_get_time_us();
                 motor_runtime_record_gate(true,opened_us);
                 /* 短Break可能发生在最终检查与MOE写之间，低窗内再次检查，禁止陈旧事务重开。 */
                 bool invalid_driver=!board_output_is_ready();
-                bool invalid_window=invalid_driver || !in_start_window();
+                bool invalid_window=invalid_driver || !in_start_window()
+                    || (BOARD_SINGLE_U && board_get_time_us()-transaction_started>=8u);
                 uint32_t checked_us=board_get_time_us();
                 bool expired=motor_runtime_output_deadline_reached(checked_us);
                 if (expired || invalid_window) {

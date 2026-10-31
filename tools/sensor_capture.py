@@ -47,7 +47,7 @@ def parse_line(raw):
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
     if raw.startswith(b"FW1,"):
-        match=re.fullmatch(rb"FW1,([0-9]{2}-[0-9]{2}-[0-9]{2}),(ALIGN_POS|ALIGN_NEG|SCAN_POS|SCAN_NEG|GATE_TEST|PULSE_V_TEST)\r\n",raw)
+        match=re.fullmatch(rb"FW1,([0-9]{2}-[0-9]{2}-[0-9]{2}),(ALIGN_POS|ALIGN_NEG|SCAN_POS|SCAN_NEG|GATE_TEST|PULSE_V_TEST|SINGLE_U)\r\n",raw)
         if not match:
             raise ValueError("firmware banner layout mismatch")
         day,hour,minute=map(int,match[1].split(b"-"))
@@ -62,19 +62,22 @@ def parse_line(raw):
         if not raw.endswith(b"\r\n") or hint not in hints:
             raise ValueError("P1F1 hint mismatch")
         return {"format":"P1F1","hint":hint.decode("ascii"),"diagnostic_only":True}
-    if raw.startswith((b"P1A1,", b"P1A2,")):
-        alignment=raw.startswith(b"P1A2,")
-        name="P1A2" if alignment else "P1A1"
+    if raw.startswith((b"P1A1,", b"P1A2,", b"P1A3,")):
+        single=raw.startswith(b"P1A3,")
+        alignment=single or raw.startswith(b"P1A2,")
+        name="P1A3" if single else ("P1A2" if alignment else "P1A1")
         header="q c r s f id direction step done reason mask origin start end cfg".split()
         widths=[8,2,2,2,8,8,2,2,2,2,2,4,8,8,8]
         if alignment:
             header += ["requested"]; widths += [8]
+        if single:
+            header += ["pwm_ticks","current_limit"]; widths += [4,4]
         stride=6 if alignment else 4
-        count=2 if alignment else 7
+        count=1 if single else (2 if alignment else 7)
         widths += ([2,8,4,4,8,8] if alignment else [2,8,4,4])*count+[4]
         pattern=name.encode()+b","+b",".join(rb"([0-9A-F]{"+str(w).encode()+rb"})" for w in widths)+rb"\r\n"
         match=re.fullmatch(pattern,raw)
-        if not match or len(raw)!=(183 if alignment else 248):
+        if not match or len(raw)!=(153 if single else (183 if alignment else 248)):
             raise ValueError(name+" layout mismatch")
         values=[int(v,16) for v in match.groups()]
         if binascii.crc_hqx(raw[:-6],0xFFFF)!=values[-1]:
@@ -84,8 +87,10 @@ def parse_line(raw):
             raise ValueError(name+" header mismatch")
         fields["direction"]=1 if fields["direction"]==1 else -1
         full_mask=(1<<count)-1
-        if fields["step"]>=count or fields["done"]>1 or fields["reason"]>10 or fields["mask"]>full_mask or fields["origin"]>16383 or fields["cfg"]!=(0x20001 if alignment else 0x10001):
+        if fields["step"]>=count or fields["done"]>1 or fields["reason"]>10 or fields["mask"]>full_mask or fields["origin"]>16383 or fields["cfg"]!=(0x30001 if single else (0x20001 if alignment else 0x10001)):
             raise ValueError(name+" sequence metadata mismatch")
+        if single and (fields["direction"]!=1 or fields["pwm_ticks"]!=900 or fields["current_limit"]!=1280):
+            raise ValueError("P1A3 stimulus identity mismatch")
         points=[]
         for i in range(count):
             j=len(header)+stride*i
@@ -102,7 +107,7 @@ def parse_line(raw):
             point=dict(count=n,sum_count=total,minimum=lo,maximum=hi)
             if alignment:
                 point.update(start=values[j+4],end=values[j+5])
-                if fields["mask"] & (1<<i) and not 200000 <= (point["end"]-point["start"]) & 0xffffffff <= 203000:
+                if fields["mask"] & (1<<i) and not (400000 if single else 200000) <= (point["end"]-point["start"]) & 0xffffffff <= (403000 if single else 203000):
                     raise ValueError(name+" point timing mismatch")
             points.append(point)
         if fields["done"] and (fields["s"]!=1 or fields["f"] or fields["r"] or fields["step"]!=count-1 or fields["mask"]!=full_mask or fields["reason"]!=1):
@@ -111,9 +116,9 @@ def parse_line(raw):
                                   or (alignment and (fields["requested"] or any(p["start"] or p["end"] for p in points)))):
             raise ValueError(name+" data without action")
         if alignment and fields["done"]:
-            gap=(points[1]["start"]-points[0]["end"]) & 0xffffffff
+            gap=0 if single else (points[1]["start"]-points[0]["end"]) & 0xffffffff
             if (fields["start"]!=points[0]["start"] or gap>=2000
-                or (fields["end"]-points[1]["end"]) & 0xffffffff > 3000
+                or (fields["end"]-points[-1]["end"]) & 0xffffffff > 3000
                 or not 0 < (fields["end"]-fields["requested"]) & 0xffffffff <= 420000):
                 raise ValueError(name+" overall timing mismatch")
         return {"format":name,**fields,"points":points,"crc":values[-1]}
@@ -319,7 +324,7 @@ def save_chunks(chunks, output, metadata):
                     raise ValueError("line exceeds 2048-byte parser bound")
                 record["fields"] = parse_line(line)
                 record["device_time_us"] = record["fields"].get("t")
-                if record["fields"]["format"] in ("P1A1","P1A2"):
+                if record["fields"]["format"] in ("P1A1","P1A2","P1A3"):
                     record["device_time_kind"]="scan_window_only; see start/end, no snapshot timestamp"
                 elif record["fields"]["format"] in ("P1F1","FW1"):
                     record["device_time_kind"]="diagnostic_hint_only; no device timestamp or CRC"

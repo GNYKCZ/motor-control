@@ -147,7 +147,8 @@ def main():
         golden = b"P1R2,00000001,01,00,01,00000000,00000019,000009C4,00000000,00000000,00000000,00000000,00,6B79\r\n"
         if replies[0] != parse_line(golden) or len(reply) != 95 or rejected != 760:
             raise RuntimeError("P1R2 independent golden/length/single-bit oracle mismatch")
-        zero_golden = b"P1Z1,00000001,05,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,1DDD\r\n"
+        zero_golden = b"P1Z1,00000001,05,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00030001,"
+        zero_golden=zero_golden+f"{binascii.crc_hqx(zero_golden,0xffff):04X}\r\n".encode()
         zero_actual = next(line + b"\n" for line in stream.split(b"\n") if line.startswith(b"P1Z1,"))
         if zero_actual != zero_golden or parse_line(zero_actual)["cn"] != 1:
             raise RuntimeError("P1Z1 independent 138B golden mismatch")
@@ -160,7 +161,7 @@ def main():
                     pass
                 else:
                     raise RuntimeError("P1Z1 accepted one-bit corruption")
-        current_prefix = b"P1V1,00000001,07,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00020001,0000,00000000,00000000,0000,0000,0000,0000,00000000,00000000,0000,0000,00,00000000,"
+        current_prefix = b"P1V1,00000001,07,00,01,00000000,00000001,00000064,0001,000007EB,000007EC,07EB,07EB,07EC,07EC,08,000C4B20,00000064,00000064,00030001,0000,00000000,00000000,0000,0000,0000,0000,00000000,00000000,0000,0000,00,00000000,"
         current_golden = current_prefix + f"{binascii.crc_hqx(current_prefix,0xFFFF):04X}\r\n".encode()
         current_actual = next(line+b"\n" for line in stream.split(b"\n") if line.startswith(b"P1V1,"))
         if current_actual != current_golden or parse_line(current_actual)["ic"] != 0:

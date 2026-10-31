@@ -18,7 +18,7 @@ struct PwmRegister {
     PwmRegister &operator&=(uint32_t v) { uint32_t old=*this; return operator=(old&v); }
 };
 struct PwmTimer {
-    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR;
+    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR,PSC;
     explicit PwmTimer(bool first):BDTR(first?R_BDTR:R_OTHER),CCR1(first?R_CCR1:R_CCR31),
         CCR2(R_CCR2),CCR3(R_CCR3),CCR4(R_CCR4),SR(first?R_SR1:R_SR3),CCER(R_CCER),EGR(R_EGR) {}
 };

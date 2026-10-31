@@ -9,6 +9,30 @@
 #include "adc.h"
 #include <stddef.h>
 
+static unsigned sampling_phase_frames;
+static bool sampling_phase_failed;
+bool board_sampling_phase_is_ready(void)
+{
+    return !sampling_phase_failed && sampling_phase_frames>=16u;
+}
+
+/** TIM2以1MHz计reset以来时间；TIM1以72MHz计载波相位，快照只允许2us/144tick不确定性。 */
+#if BOARD_SINGLE_U
+static bool sampling_phase_is_valid(void)
+{
+    uint32_t before=board_get_time_us();
+    uint32_t direction=TIM1->CR1 & TIM_CR1_DIR;
+    uint32_t elapsed=TIM2->CNT;
+    uint32_t count=TIM1->CNT;
+    uint32_t direction_after=TIM1->CR1 & TIM_CR1_DIR;
+    uint32_t after=board_get_time_us();
+    if (direction!=direction_after || after-before>2u || elapsed>=1000u || count>1800u) { return false; }
+    uint32_t phase=direction ? 3600u-count : count;
+    uint32_t reset=(phase+3600u-(elapsed*72u)%3600u)%3600u;
+    return reset<=144u || reset>=3456u;
+}
+
+#endif
 static volatile uint8_t encoder_receive_bytes[3];/**< DMA 写入的硬件内存；volatile 强制实际读取，不承担帧一致性。 */
 static const uint8_t encoder_clock_bytes[3] = {0u, 0u, 0u}; /**< 仅用于产生 24 个时钟。 */
 static board_encoder_frame_t completed_encoder; /**< 只在 RX TC 之后整体替换。 */
@@ -72,6 +96,13 @@ bool board_initialize_devices(void)
 bool board_start_sampling(void)
 {
     board_disable_output();
+    /* 在ADC/触发启动前重装PSC/ARR/RCR和计数方向，排除HAL初始化UG残留相位。
+     * 此UG仅初始化使用，所有运行期PWM事务仍不允许UG。 */
+    TIM1->CR1 &= ~(TIM_CR1_CEN | TIM_CR1_DIR);
+    TIM1->CNT=0u;
+    TIM1->EGR=TIM_EGR_UG;
+    TIM1->SR=0u;
+    TIM2->SR=0u;
     if (HAL_ADCEx_InjectedStart(&hadc2) != HAL_OK
         || HAL_ADCEx_InjectedStart_IT(&hadc1) != HAL_OK) {
         return false;
@@ -168,6 +199,11 @@ void ADC1_2_IRQHandler(void)
     uint32_t previous_mask = board_enter_critical();
     board_encoder_frame_t encoder = completed_encoder;
     board_leave_critical(previous_mask);
+#if BOARD_SINGLE_U
+    if (!sampling_phase_is_valid()) {
+        sampling_phase_failed=true; motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+    } else if (sampling_phase_frames<16u) { ++sampling_phase_frames; }
+#endif
     sample_sequence++;
     motor_sample_t sample = board_make_sample(sample_sequence, completed_us,
         (uint16_t)ADC1->JDR1, (uint16_t)ADC2->JDR1, &encoder);

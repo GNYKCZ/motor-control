@@ -32,6 +32,8 @@ void board_cancel_deadline(void);
 /** 生成初始化之后，前台校准 ADC、启用 SPI 和设备计时；不启动采样事件。
  * 返回成功与否；失败保持 PWM 禁止。仅在 main 完成全部 MX_*_Init 后调用一次。 */
 bool board_initialize_devices(void);
+/** 单U20kHz准备阶段连续验证reset相位；失败不授予输出资格。 */
+bool board_sampling_phase_is_ready(void);
 /** 前台启动 ADC/DMA 定时调度；仅在设备初始化成功、runtime 已 DISABLED 后调用一次。
  * 返回成功与否，失败不启动正常采样；无任何 PWM 通道启动操作。 */
 bool board_start_sampling(void);

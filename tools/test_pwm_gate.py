@@ -50,9 +50,9 @@ def main():
         flags = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-pedantic", *includes]
         scan_reports=[]
         automatic_reports=[]
-        for tag in ("production", "scan_forward", "scan_reverse", "align_positive", "align_negative", "synthetic"):
+        for tag in ("production", "scan_forward", "scan_reverse", "align_positive", "align_negative", "single_u", "synthetic"):
             synthetic = tag=="synthetic"
-            define = (["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else
+            define = (["-DBOARD_ALIGNMENT_MODE=2"] if tag=="single_u" else ["-DMOTOR_GATE_TEST_PROFILES"] if synthetic else
                       ["-DMOTOR_LOCAL_PULSE_BASELINE"] if tag=="production" else
                       ["-DBOARD_ALIGNMENT_MODE=0", "-DBOARD_SCAN_DIRECTION=-1"] if tag=="scan_reverse" else
                       ["-DBOARD_ALIGNMENT_MODE="+str(1 if tag=="align_positive" else -1)] if tag.startswith("align_") else ["-DBOARD_ALIGNMENT_MODE=0"])
@@ -65,7 +65,7 @@ def main():
             board = output / (tag + "_board_pwm.o")
             run([*cpp, "-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_pwm.c", "-o", board])
             exe = output / (tag + ".exe")
-            run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
+            run([*cpp, "-DTEST_TIMER_CONFIGURATION_GUARD", root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
             target_text=run([exe])
             if tag.startswith("scan_"):
                 frame=next((line+"\r\n").encode() for line in target_text.splitlines() if line.startswith("P1A1,"))
@@ -86,6 +86,12 @@ def main():
                                if line.startswith("P1A2,00000000,"))
                 automatic_reports.append(analyze_alignment(automatic,7,1))
                 evidence[tag+"_automatic"]={"hints":hints,"result":automatic}
+            if tag=="single_u":
+                record=next(parse_line((line+"\r\n").encode()) for line in target_text.splitlines() if line.startswith("P1A3,"))
+                report=analyze_alignment(record,7,1)
+                if not report["candidate_derived"] or report["parameters_applied"]:
+                    raise RuntimeError("single U candidate contract failed")
+                evidence["single_u"]=report
             if tag=="scan_forward":
                 old_window=output/"scan_window_old.c"
                 old_window.write_bytes(subprocess.check_output(["git","show",
@@ -149,6 +155,8 @@ def main():
         old = old.replace("reset(0xffffd800u);CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();",
                           "reset(0xffffd800u);CHECK(motor_runtime_arm(1u));")
         old = old.replace("timer_tick(301u);", "timer_tick(3001u);").replace("now_us+=301u;", "now_us+=3001u;")
+        # 旧夹具早于PSC寄存器模型；明确补回其原PSC9配置，不改变故障/断言逻辑。
+        old=old.replace("pwm_tim1.ARR.value=1799u;", "pwm_tim1.PSC.value=9u;pwm_tim1.ARR.value=1799u;")
         current = (root / "tests/m1/test_pwm_gate.cpp").read_text(encoding="utf-8")
         anchor = "if (kind==2u) { TIM1_BRK_IRQHandler(); }"
         oracle = {}

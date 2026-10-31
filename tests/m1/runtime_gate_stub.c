@@ -6,3 +6,5 @@ bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsig
 { (void)ticks; (void)generation; (void)step; return false; }
 bool board_schedule_deadline(uint32_t deadline_us) { (void)deadline_us; return true; }
 void board_cancel_deadline(void) { }
+
+bool board_sampling_phase_is_ready(void) { return false; }

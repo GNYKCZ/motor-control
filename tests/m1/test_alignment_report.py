@@ -90,3 +90,22 @@ print("PASS automatic diagnostic hints: exact finite layout; no CRC/timestamp au
 assert parse_line(b"FW1,31-13-24,ALIGN_POS\r\n")["version"]=="31-13-24"
 for raw in (b"FW1,00-13-24,ALIGN_POS\r\n",b"FW1,31-24-24,ALIGN_POS\r\n",b"FW1,31-13-60,ALIGN_POS\r\n",b"FW1,31-13-24,UNKNOWN\r\n"):
     rejects(lambda: parse_line(raw))
+
+# 单U400ms，独立按字段布局及CRC构造，与生产串口输出交叉验证。
+values=[1,8,0,1,0,1,1,0,1,1,1,16300,0xffff0000,(0xffff0000+400000)&0xffffffff,0x30001,0xfffefe00,900,1280,50,10000,200,200,0xffff0000,(0xffff0000+400000)&0xffffffff]
+widths=[8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,4,4,2,8,4,4,8,8]
+def single_frame(items):
+    prefix=b"P1A3,"+b"".join(f"{v:0{w}X},".encode() for v,w in zip(items,widths))
+    return prefix+f"{binascii.crc_hqx(prefix,0xffff):04X}\r\n".encode()
+raw=single_frame(values);assert len(raw)==153
+result=analyze(parse_line(raw),7,1)
+assert result["candidate_derived"] and not result["repeatability_checked"]
+assert abs(circle_difference(result["electrical_zero_rad"],-7*16500*2*math.pi/16384))<1e-12
+for i in range(len(raw)):
+    for bit in range(8):
+        broken=bytearray(raw);broken[i]^=1<<bit
+        rejects(lambda: parse_line(bytes(broken)))
+for index,bad in ((16,899),(17,256),(10,3),(7,1),(23,(values[22]+399999)&0xffffffff)):
+    items=values.copy();items[index]=bad
+    rejects(lambda: parse_line(single_frame(items)))
+print("PASS P1A3 153B independent layout, 1224 corruptions, stimulus/timing/point identity, conditional zero")

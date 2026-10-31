@@ -42,6 +42,7 @@ static volatile bool flow_enabled, flow_cancelled; /* UART IRQ取消与前台准
 static bool flow_zero_pending, flow_result_pending, flow_result_seen;
 static uint8_t flow_zero_result;
 static uint32_t flow_deadline_us, flow_last_us;
+static const uint8_t single_widths[24]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,4,4,2,8,4,4,8,8};
 static unsigned scan_field, scan_digits;
 static const uint8_t *sequence_widths; static unsigned sequence_fields;
 
@@ -177,7 +178,7 @@ static char hex_digit(uint32_t value, unsigned shift)
 static char reply_character(unsigned i)
 {
     if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
-        const char *prefix=BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,";
+        const char *prefix=BOARD_SINGLE_U ? "P1A3," : (BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,");
         if (i<5u) { return prefix[i]; }
         if (i>=reply_length-6u && i<reply_length-2u) { return hex_digit(reply_crc,(reply_length-3u-i)*4u); }
         if (i>=reply_length-2u) { return i==reply_length-2u ? '\r' : '\n'; }
@@ -261,7 +262,9 @@ void command_enable_version_report(void)
 
 static bool report_version(void)
 {
-#if defined(MOTOR_GATE_TEST_PROFILES)
+#if BOARD_SINGLE_U
+#define FIRMWARE_MODE "SINGLE_U"
+#elif defined(MOTOR_GATE_TEST_PROFILES)
 #define FIRMWARE_MODE "GATE_TEST"
 #elif defined(MOTOR_LOCAL_PULSE_BASELINE)
 #define FIRMWARE_MODE "PULSE_V_TEST"
@@ -378,12 +381,12 @@ bool command_poll(uint32_t now_us)
             reply_length=221u;
             if (!motor_runtime_read_current(&reply_status,&reply_zero,&reply_current)) { reply.result=REPLY_SNAPSHOT; }
         } else if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
-            reply_length=BOARD_ALIGNMENT_MODE ? 183u : sizeof(reply_line);
+            reply_length=BOARD_SINGLE_U ? 153u : (BOARD_ALIGNMENT_MODE ? 183u : sizeof(reply_line));
             if (!motor_runtime_read_scan(&reply_status,&reply_scan)) { reply.result=REPLY_SNAPSHOT; }
             uint32_t header[15]={reply.sequence,reply.code,reply.result,(uint32_t)reply_status.state,
                 reply_status.fault_flags,reply_scan.action_id,(uint8_t)reply_scan.direction,reply_scan.step,
                 reply_scan.done,reply_scan.reason,reply_scan.mask,reply_scan.origin,reply_scan.started_us,
-                reply_scan.ended_us,BOARD_ALIGNMENT_MODE ? 0x00020001u : 0x00010001u};
+                reply_scan.ended_us,BOARD_SINGLE_U ? 0x00030001u : (BOARD_ALIGNMENT_MODE ? 0x00020001u : 0x00010001u)};
             for (unsigned j=0u;j<15u;++j) { scan_fields[j]=header[j]; }
             for (unsigned j=0u;j<7u;++j) {
                 scan_fields[15u+4u*j]=reply_scan.point[j].count;
@@ -404,6 +407,16 @@ bool command_poll(uint32_t now_us)
                     scan_fields[k+4u]=reply_scan.point[j].started_us;
                     scan_fields[k+5u]=reply_scan.point[j].ended_us;
                 }
+            }
+            if (BOARD_SINGLE_U) {
+                sequence_widths=single_widths; sequence_fields=24u;
+                scan_fields[16]=900u; scan_fields[17]=1280u;
+                scan_fields[18]=reply_scan.point[0].count;
+                scan_fields[19]=(uint32_t)reply_scan.point[0].sum;
+                scan_fields[20]=(uint16_t)reply_scan.point[0].minimum;
+                scan_fields[21]=(uint16_t)reply_scan.point[0].maximum;
+                scan_fields[22]=reply_scan.point[0].started_us;
+                scan_fields[23]=reply_scan.point[0].ended_us;
             }
             scan_field=0u; scan_digits=sequence_widths[0];
         }

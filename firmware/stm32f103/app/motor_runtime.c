@@ -17,7 +17,9 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 #ifndef MOTOR_GATE_TEST_PROFILES
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
 #if BOARD_SCAN_ENABLED
-#if BOARD_ALIGNMENT_MODE == 1
+#if BOARD_SINGLE_U
+static const pwm_profile_t local_profile = {{900u,0u,0u,144u},2000u,420000u};
+#elif BOARD_ALIGNMENT_MODE == 1
 static const pwm_profile_t local_profile = {{60u,60u,0u,434u},5000u,420000u};
 #elif BOARD_ALIGNMENT_MODE == -1
 static const pwm_profile_t local_profile = {{60u,0u,60u,434u},5000u,420000u};
@@ -90,7 +92,7 @@ static void expire_output(uint32_t now)
         motor_runtime_latch_fault(MOTOR_FAULT_FEEDBACK);
     } else if (BOARD_SCAN_ENABLED && scan_pending && (int32_t)(now-scan_submit_deadline_us)>=0) {
         scan_capture.reason=6u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
-    } else if ((int32_t)(now-(runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us))>=0) {
+    } else if ((int32_t)(now-((runtime_status.state==MOTOR_RUNTIME_ARMED || (BOARD_SINGLE_U && runtime_status.state==MOTOR_RUNTIME_STARTING)) ? arm_deadline_us : pulse_deadline_us))>=0) {
         if (BOARD_SCAN_ENABLED) {
             scan_capture.reason=9u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
         }
@@ -109,7 +111,7 @@ static void schedule_output_deadline(void)
     uint32_t deadline=runtime_status.sample.current_completed_us+BOARD_SAMPLE_GAP_LIMIT_US+1u;
     uint32_t feedback_deadline=runtime_status.feedback_completed_us+BOARD_FEEDBACK_GAP_LIMIT_US+1u;
     if ((int32_t)(feedback_deadline-deadline)<0) { deadline=feedback_deadline; }
-    uint32_t output_deadline=runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us;
+    uint32_t output_deadline=(runtime_status.state==MOTOR_RUNTIME_ARMED || (BOARD_SINGLE_U && runtime_status.state==MOTOR_RUNTIME_STARTING)) ? arm_deadline_us : pulse_deadline_us;
     if ((int32_t)(output_deadline-deadline)<0) { deadline=output_deadline; }
     if (BOARD_SCAN_ENABLED && scan_pending && (int32_t)(scan_submit_deadline_us-deadline)<0) {
         deadline=scan_submit_deadline_us;
@@ -189,7 +191,7 @@ void motor_runtime_init(void)
     zero_began_us=0u; zero_ended_us=0u;
     zero_explicit=false;
     current_capture=(motor_current_snapshot_t){0};
-    scan_capture=(motor_scan_snapshot_t){0}; scan_capture.direction=BOARD_ALIGNMENT_MODE ? BOARD_ALIGNMENT_MODE : BOARD_SCAN_DIRECTION;
+    scan_capture=(motor_scan_snapshot_t){0}; scan_capture.direction=BOARD_SINGLE_U ? 1 : (BOARD_ALIGNMENT_MODE ? BOARD_ALIGNMENT_MODE : BOARD_SCAN_DIRECTION);
     scan_pending=false; scan_applied_us=0u; scan_submit_deadline_us=0u; scan_requested_step=0u;
     still_seen=false; fault_seen=false; position_count=0; still_min=0; still_max=0;
     output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
@@ -306,7 +308,7 @@ bool motor_runtime_arm(unsigned profile_id)
     bool accepted=candidate!=NULL && runtime_status.state==MOTOR_RUNTIME_DISABLED && output_inputs_are_valid();
     if (accepted) {
         output_profile=candidate; output_generation++;
-        arm_deadline_us=board_get_time_us()+candidate->arm_us;
+        arm_deadline_us=BOARD_SINGLE_U ? last_action.requested_us+2000u : board_get_time_us()+candidate->arm_us;
         runtime_status.state=MOTOR_RUNTIME_ARMED;
         schedule_output_deadline();
         accepted=runtime_status.state==MOTOR_RUNTIME_ARMED;
@@ -345,6 +347,7 @@ bool motor_runtime_commit_output(uint32_t generation)
 {
     /* board已持同一短锁；成功只授予本次MOE写，其他路径从不自动使能。 */
     if (runtime_status.state!=MOTOR_RUNTIME_STARTING || generation!=output_generation
+        || (BOARD_SINGLE_U && (int32_t)(board_get_time_us()-arm_deadline_us)>=0)
         || (int32_t)(pulse_deadline_us-board_get_time_us())<=0 || !output_inputs_are_valid()) { return false; }
     runtime_status.state=MOTOR_RUNTIME_ACTIVE;
     return true;
@@ -353,7 +356,8 @@ bool motor_runtime_commit_output(uint32_t generation)
 bool motor_runtime_output_deadline_reached(uint32_t now_us)
 {
     return (runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
-        && (int32_t)(now_us-pulse_deadline_us)>=0;
+        && ((int32_t)(now_us-pulse_deadline_us)>=0
+            || (BOARD_SINGLE_U && runtime_status.state==MOTOR_RUNTIME_STARTING && (int32_t)(now_us-arm_deadline_us)>=0));
 }
 
 #if BOARD_SCAN_ENABLED
@@ -365,10 +369,11 @@ static void scan_step_sample(const motor_sample_t *sample)
     }
     int32_t du=(int32_t)sample->raw_current_u_count*512-(int32_t)runtime_status.estimated_offset.sum_u_count;
     int32_t dv=(int32_t)sample->raw_current_v_count*512-(int32_t)runtime_status.estimated_offset.sum_v_count;
+    const int32_t current_limit=BOARD_SINGLE_U ? 1280*512 : 256*512;
     if (sample->raw_current_u_count==0u || sample->raw_current_u_count==4095u
         || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u
-        || du>131072 || du< -131072 || dv>131072 || dv< -131072
-        || du+dv>131072 || du+dv< -131072) {
+        || du>current_limit || du< -current_limit || dv>current_limit || dv< -current_limit
+        || du+dv>current_limit || du+dv< -current_limit) {
         scan_capture.reason=5u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
     }
     if (scan_pending) { expire_output(board_get_time_us()); return; }
@@ -379,7 +384,7 @@ static void scan_step_sample(const motor_sample_t *sample)
      * 先收窗口内最后一帧，再结束点；允许其ADC完成稍晚于200ms，不夹带窗口前角度。 */
     uint32_t angle_began=sample->encoder.read_started_us-scan_applied_us;
     uint32_t angle_ended=sample->encoder.read_completed_us-scan_applied_us;
-    if (angle_began>=150000u && angle_began<200000u && angle_ended<200000u) {
+    if (angle_began>=(BOARD_SINGLE_U ? 350000u : 150000u) && angle_began<(BOARD_SINGLE_U ? 400000u : 200000u) && angle_ended<(BOARD_SINGLE_U ? 400000u : 200000u)) {
         if (point->count>=64u) { scan_capture.reason=8u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return; }
         int16_t position=(int16_t)(position_count-action_origin);
         if (!point->count) { point->minimum=position; point->maximum=position; }
@@ -387,7 +392,7 @@ static void scan_step_sample(const motor_sample_t *sample)
         if (position>point->maximum) { point->maximum=position; }
         point->sum+=position; point->count++;
     }
-    if (elapsed>=200000u) {
+    if (elapsed>=(BOARD_SINGLE_U ? 400000u : 200000u)) {
         if (point->count<40u || point->maximum-point->minimum>=16) {
             scan_capture.reason=7u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
         }

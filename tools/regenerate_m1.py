@@ -22,6 +22,9 @@ def preserve_user_code(generated, current):
     generated_names = {m[2] for m in USER.finditer(generated)}
     if not blocks.keys() <= generated_names:
         raise SystemExit("生成模板删除了已有 USER CODE 区；拒绝丢弃业务代码，请先人工复核。")
+    version = re.search(r"/\* Firmware version: [^\r\n]*? \*/", current)
+    if version:
+        generated = generated.replace("/* USER CODE BEGIN Header */", "/* USER CODE BEGIN Header */\n"+version[0], 1)
     return USER.sub(lambda m: m[1] + blocks.get(m[2], m[3]) + m[4], generated)
 
 

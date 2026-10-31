@@ -17,10 +17,11 @@ def analyze(record, pole_pairs, encoder_direction):
     """p/d是调用者明确提供的前提，不从同一U点推断并自证。"""
     if type(pole_pairs) is not int or not 1 <= pole_pairs <= 32 or encoder_direction not in (-1, 1):
         raise ValueError("必须显式提供p=1..32及d=+1/-1")
-    if record["format"] not in ("P1A1", "P1A2") or record["r"] or record["s"] != 1 or record["f"] or not record["done"] or record["reason"] != 1:
+    if record["format"] not in ("P1A1", "P1A2", "P1A3") or record["r"] or record["s"] != 1 or record["f"] or not record["done"] or record["reason"] != 1:
         raise ValueError("需要无故障、正常完成的矢量结果")
-    alignment = record["format"] == "P1A2"
-    if record["mask"] != (3 if alignment else 127) or record["step"] != (1 if alignment else 6):
+    single = record["format"] == "P1A3"
+    alignment = single or record["format"] == "P1A2"
+    if record["mask"] != (1 if single else (3 if alignment else 127)) or record["step"] != (0 if single else (1 if alignment else 6)):
         raise ValueError("缺少完整保持点")
     reference = record["requested"] if alignment else record["start"]
     if not 0 < (record["end"]-reference) & 0xffffffff <= (420000 if alignment else 1420000):
@@ -35,7 +36,11 @@ def analyze(record, pole_pairs, encoder_direction):
                   reference_vector="U: phi=0, ticks=(60,0,0)", configuration=record["cfg"],
                   repeatability_checked=False, calibration_verified=False, parameters_applied=False,
                   source=record, limits="条件于p/d及电压矢量实际对齐；不证明绝对精度或硬件身份")
-    if alignment:
+    if single:
+        report.update(candidate_derived=True, electrical_zero_rad=zero(positions[0]),
+                      pwm_ticks=record["pwm_ticks"], current_limit=record["current_limit"],
+                      independent_actions=1)
+    elif alignment:
         delta = positions[1]-positions[0]
         if abs(delta) <= 32 or delta*record["direction"]*encoder_direction >= 0:
             raise ValueError("预置至U无明确净位移或方向不符")

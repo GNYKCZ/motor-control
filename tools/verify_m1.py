@@ -132,7 +132,7 @@ def main():
                   "tools/session_probe.py", "tests/m1/test_session_probe.py",
                   "tests/m1/test_zero_offset_report.py", "tests/m1/test_calibration_timing.py")]
     own_paths += [root / name for name in ("docs/commutation_scan_design.md", "tools/commutation_report.py", "tests/m1/test_commutation_report.py")]
-    own_paths += [root / name for name in ("docs/electrical_zero_alignment_design.md", "tools/alignment_report.py", "tests/m1/test_alignment_report.py")]
+    own_paths += [root / name for name in ("docs/electrical_zero_alignment_design.md", "tools/alignment_report.py", "tests/m1/test_alignment_report.py", "tests/m1/test_single_u_phase.py")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
