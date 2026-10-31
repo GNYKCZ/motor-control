@@ -11,6 +11,8 @@ extern "C" {
 void current_loop_init(void);
 /** 启动前无输出的真实数学路径计时通过；不是硬件峰值或WCET认证。 */
 bool current_loop_is_ready(void);
+/** 只读准备计时失败，用于提示准确原因，不解除任何输出资格。 */
+bool current_loop_timing_failed(void);
 void current_loop_begin(uint32_t generation, sensor_offset_t offset);
 void current_loop_abort(void);
 void current_loop_queue(const motor_sample_t *sample);

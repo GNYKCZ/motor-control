@@ -94,3 +94,8 @@ M2a回归：7,210个独立电流投影、415,317个极坐标/线电压工况，�
 提交后再次运行两套入口；完整head、干净状态和九项M2b/六项M2a输入哈希分别保存在
 `build/host_current_control/test_evidence.json` 与 `build/host_foc_math/test_evidence.json`，
 最终提交和独立审查状态以PR记录为准，旧PR9/#10的PASS不自动继承到本批。
+
+
+受限板级实验另提供`current_control_step_bounded`单精度入口；它的输入域/积分域收窄及误差门槛
+见头文件和[板级验证记录](dq_current_loop.md)。本文件通用double入口与原oracle不变。
+有界入口不负责板级使能，也不得将同一次未实际施加的计算直接提交为PI状态。

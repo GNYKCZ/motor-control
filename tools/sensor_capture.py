@@ -57,7 +57,7 @@ def parse_line(raw):
     if raw.startswith(b"P1F1,"):
         # 固定提示不带CRC，仅辅助观察；不能充当真实数据/校准或动作成功证据。
         hints={b"WAIT_STILL",b"COLLECT_ZERO",b"READY_PRESS_PA12",b"FAILED_INPUT",b"FAILED_NOT_STILL",
-               b"FAILED_ZERO_INVALID",b"FAILED_ZERO_TIMEOUT",b"ACTION_DONE",b"ACTION_FAILED",b"FAILED_STOP"}
+               b"FAILED_ZERO_INVALID",b"FAILED_ZERO_TIMEOUT",b"ACTION_DONE",b"ACTION_FAILED",b"FAILED_STOP",b"FAILED_CONTROL_TIMING"}
         hint=raw[5:-2]
         if not raw.endswith(b"\r\n") or hint not in hints:
             raise ValueError("P1F1 hint mismatch")

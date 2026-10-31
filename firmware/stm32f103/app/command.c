@@ -4,6 +4,7 @@
 #include "board_io.h"
 #include "motor_runtime.h"
 #include "board_config.h"
+#include "current_loop.h"
 #include <stddef.h>
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
@@ -323,6 +324,9 @@ static void local_flow_poll(uint32_t now_us)
     if (flow_state==FLOW_FAILED || flow_state==FLOW_FINISHED) { return; }
     if (flow_cancelled) { local_flow_failed(10u,REPLY_DENIED); return; }
     if (status.fault_flags) { local_flow_failed(4u,REPLY_DENIED); return; }
+#if BOARD_DQ_CURRENT_LOOP
+    if (current_loop_timing_failed()) { local_flow_failed(11u,REPLY_DENIED);return; }
+#endif
     if (flow_state==FLOW_WAIT) {
         uint32_t mask=board_enter_critical();
         bool restarted=!flow_cancelled && motor_runtime_restart_zero();
@@ -349,7 +353,7 @@ static bool local_flow_notice(void)
     static const char *const lines[]={"", "P1F1,WAIT_STILL\r\n", "P1F1,COLLECT_ZERO\r\n",
         "P1F1,READY_PRESS_PA12\r\n", "P1F1,FAILED_INPUT\r\n", "P1F1,FAILED_NOT_STILL\r\n",
         "P1F1,FAILED_ZERO_INVALID\r\n", "P1F1,FAILED_ZERO_TIMEOUT\r\n",
-        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n"};
+        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n", "P1F1,FAILED_CONTROL_TIMING\r\n"};
     if (!flow_enabled || !flow_notice) { return false; }
     if (board_serial_is_busy()) { return true; }
     const char *line=lines[flow_notice]; uint32_t length=0u;

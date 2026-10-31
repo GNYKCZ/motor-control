@@ -1,6 +1,7 @@
 """真实前台电流环/寄存器/生命周期集成；只运行主机，不访问串口或硬件。"""
 from pathlib import Path
 from dq_report import reports,parse
+from sensor_capture import parse_line
 import subprocess,os,json,hashlib
 r=Path(__file__).resolve().parents[1];fw=r/'firmware/stm32f103';out=r/'build/dq_current/host';out.mkdir(parents=True,exist_ok=True)
 gcc=Path('D:/mingw64/bin/gcc.exe');env=os.environ.copy();env['PATH']=str(gcc.parent)+os.pathsep+env.get('PATH','')
@@ -15,7 +16,7 @@ def loop_header(source):
 old_main=subprocess.check_output(['git','show','ca5bf7a206c63e75685a6624cec80428922412f9:firmware/stm32f103/Core/Src/main.c'],cwd=r,text=True)
 (out/'dq_production_loop_old.h').write_text(loop_header(old_main),encoding='utf-8')
 steps=[]
-inputs=[*sources,fw/'board/board_pwm.c',fw/'Core/Src/main.c',fw/'Core/Src/tim.c',fw/'m1_sampling.ioc',fw/'project_sources.json',r/'docs/dq_current_loop.md',r/'tests/m1/test_pwm_gate.cpp',r/'tests/m1/test_dq_current.cpp',Path(__file__),r/'tools/dq_report.py']
+inputs=[*sources,fw/'board/board_pwm.c',fw/'Core/Src/main.c',fw/'Core/Src/tim.c',fw/'m1_sampling.ioc',fw/'project_sources.json',r/'docs/dq_current_loop.md',r/'tests/m1/test_pwm_gate.cpp',r/'tests/m1/test_dq_current.cpp',r/'tests/control_core/test_current_control_bounded.c',Path(__file__),r/'tools/dq_report.py',r/'tools/sensor_capture.py']
 inputs+=list((fw/'app').glob('*.h'))+list((fw/'board').glob('*.h'))+list((r/'control_core').glob('*.h'))+list(model.glob('*.h'))
 hashes={p.relative_to(r).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
 head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip()
@@ -31,6 +32,10 @@ def run(cmd):
  p=subprocess.run(list(map(str,cmd)),cwd=r,env=env,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=90);steps.append(dict(command=list(map(str,cmd)),returncode=p.returncode,output=p.stdout+p.stderr));evidence['result']='FAIL' if p.returncode else 'IN PROGRESS';previous.write_text(json.dumps(evidence,indent=2)+'\n')
  if p.returncode:print((p.stdout+p.stderr)[-2000:]);raise RuntimeError('DQ integration failed')
  return p.stdout
+oracle=out/'bounded_oracle.exe'
+run([gcc,'-std=c11','-O2','-Wall','-Wextra','-Werror','-pedantic','-I',r/'control_core',r/'control_core/current_control.c',r/'control_core/foc_math.c',r/'tests/control_core/test_current_control_bounded.c','-lm','-o',oracle])
+print(run([oracle]).strip())
+assert parse_line(b"P1F1,FAILED_CONTROL_TIMING\r\n")["hint"]=="FAILED_CONTROL_TIMING"
 for reference in (0,40,-40):
  define=['-DBOARD_DQ_REFERENCE_MA='+str(reference)];objects=[]
  for p in sources:

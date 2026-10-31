@@ -76,6 +76,9 @@ int main(void)
     reset();pwm_tim1.RCR.value=3u;CHECK(!board_output_is_ready());
     reset();pwm_tim1.CCMR1.value=0u;CHECK(!board_output_is_ready());
     reset();clock_step=201u;current_loop_poll();clock_step=0u;CHECK(!current_loop_is_ready());
+    CHECK(current_loop_timing_failed());capture_flow=true;command_enable_local_flow();automatic_steps(false,80u);
+    CHECK(count_flow("P1F1,FAILED_CONTROL_TIMING")==1u && count_flow("P1F1,FAILED_ZERO_INVALID")==0u);
+    CHECK(enables==0u);
     dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));now_us+=227u;sample(true,2027u,2028u);
     now_us+=500u;current_loop_poll();CHECK(status().state==MOTOR_RUNTIME_FAULT);check_closed();
     // 真提交的Break/STOP/绝对期限交错；无额外使能，撤销后任何UEV不重开。

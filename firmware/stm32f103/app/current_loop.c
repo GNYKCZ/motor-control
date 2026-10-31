@@ -39,6 +39,7 @@ void current_loop_init(void)
     queued=inflight=benchmark_failed=false;header_pending=true;
     state=(current_control_state_t){0};pending_state=state;
 }
+bool current_loop_timing_failed(void) { return benchmark_failed; }
 bool current_loop_is_ready(void) { return benchmark_step==32u && !benchmark_failed
     && calibration.source_sampling_profile==BOARD_SAMPLING_PROFILE_ID && calibration.pole_pairs==7u
     && calibration.direction==1 && calibration.zero_count==7453u; }
@@ -62,10 +63,10 @@ void current_loop_queue(const motor_sample_t *sample)
 void current_loop_poll(void)
 {
     if (!generation && benchmark_step<32u && !benchmark_failed) {
-        /* 前台单片计时，IRQ保持开放；包含double/sin/cos/限幅的真实生产核心。 */
+        /* 前台单片计时，IRQ保持开放；包含共享单精度sin/cos/限幅的真实生产核心。 */
         current_control_state_t trial={(benchmark_step & 1u) ? 1.0f : 0.0f,(benchmark_step & 2u) ? -1.0f : 0.0f};current_control_output_t result;
         current_control_input_t input={0.01f,-0.02f,(float)benchmark_step*0.2f,0.0f,0.04f,12.0f,0.001f};
-        uint32_t began=board_get_time_us();bool ok=current_control_step(&trial,config,input,&result);
+        uint32_t began=board_get_time_us();bool ok=current_control_step_bounded(&trial,config,input,&result);
         uint32_t elapsed=board_get_time_us()-began;
         if (elapsed>maximum_compute) { maximum_compute=elapsed; }
         if (!ok || elapsed>200u) { benchmark_failed=true;header_pending=true;return; }
@@ -91,7 +92,7 @@ void current_loop_poll(void)
         *calibration.pole_pairs*calibration.direction*0.000383495197f,6.2831853072f);
     if (theta<0.0f) { theta+=6.2831853072f; }
     current_control_input_t input={u,v,theta,0.0f,(float)BOARD_DQ_REFERENCE_MA*0.001f*ramp,12.0f,(float)dt*0.000001f};
-    current_control_output_t result;bool ok=current_control_step(&next,config,input,&result);
+    current_control_output_t result;bool ok=current_control_step_bounded(&next,config,input,&result);
     uint32_t computed=board_get_time_us();uint32_t cost=computed-began;
     if (cost>maximum_compute) { maximum_compute=cost; }
     mask=board_enter_critical();

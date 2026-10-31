@@ -57,4 +57,11 @@ bool current_control_reset(current_control_state_t *state);
  * 算术采用double中间量、float发布；完整公式/参数范围见M2b契约。 */
 bool current_control_step(current_control_state_t *state, current_control_config_t config,
     current_control_input_t input, current_control_output_t *output);
+/** 板级低电压有界单精度入口：同方程/状态事务，范围外拒绝且不回退到慢路径。
+ * U/V各±0.2A，角[0,2pi]，母线9..15V，参考输入±1A/每轴限值1..50mA；
+ * Kp0..2，Ki0..500，tracking0..1000，dt上下界0.1..2ms，modulation0.001..0.1，积分±2V。
+ * 下一积分超±2V也拒绝；有限范围同时拒绝NaN/Inf。single precision误差用double入口独立对照。
+ * 非参数整定或校准接口；调用方仍须在PWM真实提交后才采纳临时积分。 */
+bool current_control_step_bounded(current_control_state_t *state,current_control_config_t config,
+    current_control_input_t input,current_control_output_t *output);
 #endif
