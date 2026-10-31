@@ -56,19 +56,24 @@ void board_leave_critical(uint32_t previous_mask)
     __set_PRIMASK(previous_mask);
 }
 
-uint32_t board_get_time_us(void)
+uint32_t board_get_time_us_locked(void)
 {
-    uint32_t previous_mask = board_enter_critical();
     uint32_t high_us = device_time_high_us;
     uint32_t low_us = TIM4->CNT;
     if ((TIM4->SR & TIM_SR_UIF) != 0u) {
-        /* 溢出 IRQ 尚未处理时补一次高位；不清 UIF，交给唯一 IRQ 写入者处理。
-         * 需要 IRQ 最长屏蔽小于 65.536 ms；本批不宣称已测得实时预算。 */
+        /* 高位IRQ被调用者的锁屏蔽；补偿待决溢出，不清UIF或制造第二个写入者。 */
         high_us += 65536u;
         low_us = TIM4->CNT;
     }
-    board_leave_critical(previous_mask);
     return high_us + low_us;
+}
+
+uint32_t board_get_time_us(void)
+{
+    uint32_t previous_mask = board_enter_critical();
+    uint32_t value=board_get_time_us_locked();
+    board_leave_critical(previous_mask);
+    return value;
 }
 
 /** 生成初始化完成后的运行准备；不再配置时钟/引脚/ADC 通道或定时器参数。

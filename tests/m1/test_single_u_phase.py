@@ -57,3 +57,36 @@ subprocess.run([str(out/'phase.exe')],check=True,env=env)
 (out/'evidence.json').write_text(json.dumps({'result':'PASS','production_function_sha256':hashlib.sha256(function.encode()).hexdigest(),
     'board_io_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'oracle':'reset shift0..3599, TIM2 us175..999, exact circular <=144, 2/3us read budget, direction transition','hardware':'NOT RUN'},indent=2)+'\n')
 print('PASS production phase check: 2,970,000 phase/time combinations, half-cycle rejection, 2us boundary and transition rejection')
+
+# 编译实际时间读取函数：公共入口持锁、已持锁入口不重复加锁，两者同一溢出补偿。
+clock_start=text.index("uint32_t board_get_time_us_locked(void)")
+clock_end=text.index("/** 生成初始化",clock_start)
+clock_source=text[clock_start:clock_end]
+clock_fixture="""#include <stdint.h>
+#include <assert.h>
+struct Timer { uint32_t CNT,SR; } timer;
+#define TIM4 (&timer)
+#define TIM_SR_UIF 1u
+static uint32_t device_time_high_us,mask,enters,leaves;
+uint32_t board_enter_critical(void) { uint32_t previous=mask;mask=1;enters++;return previous; }
+void board_leave_critical(uint32_t previous) { mask=previous;leaves++; }
+"""+clock_source+"""
+int main(void) {
+ const uint32_t highs[]={0u,65536u,0xffff0000u};
+ const uint32_t lows[]={0u,1u,65535u};
+ for(unsigned h=0;h<3;h++) for(unsigned l=0;l<3;l++) for(unsigned pending=0;pending<2;pending++) {
+   device_time_high_us=highs[h];timer.CNT=lows[l];timer.SR=pending;
+   uint32_t expected=highs[h]+lows[l]+(pending ? 65536u : 0u);
+   mask=1;enters=leaves=0;
+   assert(board_get_time_us_locked()==expected && mask==1 && enters==0 && leaves==0);
+   assert(timer.SR==pending); // 只读时间不消费UIF
+   mask=0;assert(board_get_time_us()==expected && mask==0 && enters==1 && leaves==1);
+   mask=1;assert(board_get_time_us()==expected && mask==1 && enters==2 && leaves==2);
+ }
+ return 0;
+}
+"""
+(out/'clock.c').write_text(clock_fixture,encoding='utf-8')
+subprocess.run([str(gcc),'-O2','-Wall','-Wextra','-Werror',str(out/'clock.c'),'-o',str(out/'clock.exe')],check=True,env=env)
+subprocess.run([str(out/'clock.exe')],check=True,env=env)
+print("PASS production locked/public clock: pending UIF, 16/32bit wrap, nested IRQ state and zero extra locks")

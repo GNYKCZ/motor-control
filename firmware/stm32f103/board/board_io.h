@@ -40,6 +40,8 @@ bool board_start_sampling(void);
 /** 返回 1 MHz、32 bit 设备微秒计数，模 2^32（约 71.6 min）回绕。
  * 仅设备初始化成功后有效；在 IRQ 和前台均可调用，短临界区保护溢出扩展。 */
 uint32_t board_get_time_us(void);
+/** 调用者已持PRIMASK短锁，读取同一TIM4时间且保留溢出补偿；不重复屏蔽/恢复IRQ。 */
+uint32_t board_get_time_us_locked(void);
 /** 初始化后启用USART2接收/错误IRQ；不发送命令、不使能输出。 */
 void board_start_serial_receive(void);
 /** 前台查询串口是否仍持有上次缓冲，true 时调用者不能修改该缓冲。 */

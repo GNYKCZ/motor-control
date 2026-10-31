@@ -91,6 +91,7 @@ void board_leave_critical(uint32_t old)
     if (!mask && queued_stop) { queued_stop=false; motor_runtime_stop(); }
 }
 uint32_t board_get_time_us(void) { if (advancing_ticks) { advance_timer(36u); } uint32_t old=now_us;now_us+=clock_step;return old; }
+uint32_t board_get_time_us_locked(void) { CHECK(mask==1u);return board_get_time_us(); }
 #if BOARD_SCAN_ENABLED
 static char scan_wire[257];
 static bool capture_flow;
