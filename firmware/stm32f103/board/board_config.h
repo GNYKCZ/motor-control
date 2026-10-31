@@ -11,6 +11,18 @@
 #define BOARD_SAMPLE_GAP_LIMIT_US 3000u     /**< 测试配置正常约 999.44 us；超出即判输入失步。 */
 #define BOARD_BOOT_SAMPLE_LIMIT_US 10000u   /**< 测试配置首个完整有效帧最多等待 10 ms，时间由设备计数。 */
 #define BOARD_TELEMETRY_PERIOD_MS 5000u     /**< 前台每5秒尝试导出一次；不影响采样或命令回执。 */
+/* 0保留已验证七点模式；+1/-1仅由显式构建选择预置侧。串口不能选择。 */
+#ifndef BOARD_ALIGNMENT_MODE
+#define BOARD_ALIGNMENT_MODE 0
+#endif
+#if BOARD_ALIGNMENT_MODE != 0 && BOARD_ALIGNMENT_MODE != 1 && BOARD_ALIGNMENT_MODE != -1
+#error "Alignment mode must be 0, +1 or -1"
+#endif
+#if BOARD_ALIGNMENT_MODE && (defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE))
+#error "Alignment cannot use host-only legacy profiles"
+#endif
+#define BOARD_SEQUENCE_POINTS (BOARD_ALIGNMENT_MODE ? 2u : 7u)
+#define BOARD_SEQUENCE_LIMIT_US (BOARD_ALIGNMENT_MODE ? 420000u : 1420000u)
 #ifndef BOARD_SCAN_DIRECTION
 #define BOARD_SCAN_DIRECTION 1 /**< 编译期方向，反向构建显式设-1；串口不可改变。 */
 #endif

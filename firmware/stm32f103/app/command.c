@@ -32,7 +32,10 @@ static motor_scan_snapshot_t reply_scan;
 static uint32_t scan_fields[43];
 static const uint8_t scan_widths[43]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,
     2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4,2,8,4,4};
+static const uint8_t alignment_widths[28]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,
+    2,8,4,4,8,8,2,8,4,4,8,8};
 static unsigned scan_field, scan_digits;
+static const uint8_t *sequence_widths; static unsigned sequence_fields;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -163,13 +166,13 @@ static char hex_digit(uint32_t value, unsigned shift)
 static char reply_character(unsigned i)
 {
     if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
-        static const char prefix[]="P1A1,";
+        const char *prefix=BOARD_ALIGNMENT_MODE ? "P1A2," : "P1A1,";
         if (i<5u) { return prefix[i]; }
-        if (i>=242u && i<=245u) { return hex_digit(reply_crc,(245u-i)*4u); }
-        if (i>=246u) { return i==246u ? '\r' : '\n'; }
+        if (i>=reply_length-6u && i<reply_length-2u) { return hex_digit(reply_crc,(reply_length-3u-i)*4u); }
+        if (i>=reply_length-2u) { return i==reply_length-2u ? '\r' : '\n'; }
         if (!scan_digits) {
             scan_field++;
-            if (scan_field<43u) { scan_digits=scan_widths[scan_field]; }
+            if (scan_field<sequence_fields) { scan_digits=sequence_widths[scan_field]; }
             return ',';
         }
         scan_digits--; return hex_digit(scan_fields[scan_field],scan_digits*4u);
@@ -266,12 +269,12 @@ bool command_poll(uint32_t now_us)
             reply_length=221u;
             if (!motor_runtime_read_current(&reply_status,&reply_zero,&reply_current)) { reply.result=REPLY_SNAPSHOT; }
         } else if (reply.code==REQUEST_SCAN_STATUS && BOARD_SCAN_ENABLED) {
-            reply_length=sizeof(reply_line);
+            reply_length=BOARD_ALIGNMENT_MODE ? 183u : sizeof(reply_line);
             if (!motor_runtime_read_scan(&reply_status,&reply_scan)) { reply.result=REPLY_SNAPSHOT; }
             uint32_t header[15]={reply.sequence,reply.code,reply.result,(uint32_t)reply_status.state,
                 reply_status.fault_flags,reply_scan.action_id,(uint8_t)reply_scan.direction,reply_scan.step,
                 reply_scan.done,reply_scan.reason,reply_scan.mask,reply_scan.origin,reply_scan.started_us,
-                reply_scan.ended_us,0x00010001u};
+                reply_scan.ended_us,BOARD_ALIGNMENT_MODE ? 0x00020001u : 0x00010001u};
             for (unsigned j=0u;j<15u;++j) { scan_fields[j]=header[j]; }
             for (unsigned j=0u;j<7u;++j) {
                 scan_fields[15u+4u*j]=reply_scan.point[j].count;
@@ -279,7 +282,21 @@ bool command_poll(uint32_t now_us)
                 scan_fields[17u+4u*j]=(uint16_t)reply_scan.point[j].minimum;
                 scan_fields[18u+4u*j]=(uint16_t)reply_scan.point[j].maximum;
             }
-            scan_field=0u; scan_digits=scan_widths[0];
+            sequence_widths=scan_widths; sequence_fields=43u;
+            if (BOARD_ALIGNMENT_MODE) {
+                sequence_widths=alignment_widths; sequence_fields=28u;
+                scan_fields[15]=reply_action.requested_us;
+                for (unsigned j=0u;j<2u;++j) {
+                    unsigned k=16u+6u*j;
+                    scan_fields[k]=reply_scan.point[j].count;
+                    scan_fields[k+1u]=(uint32_t)reply_scan.point[j].sum;
+                    scan_fields[k+2u]=(uint16_t)reply_scan.point[j].minimum;
+                    scan_fields[k+3u]=(uint16_t)reply_scan.point[j].maximum;
+                    scan_fields[k+4u]=reply_scan.point[j].started_us;
+                    scan_fields[k+5u]=reply_scan.point[j].ended_us;
+                }
+            }
+            scan_field=0u; scan_digits=sequence_widths[0];
         }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;

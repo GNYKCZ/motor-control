@@ -82,7 +82,8 @@ bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsig
 {
     /* 调用者已持runtime锁。影子寄存器不同步写不是原子提交：检测写间UEV，不能洗掉标志。 */
     uint32_t high=(ticks.u==60u)+(ticks.v==60u)+(ticks.w==60u);
-    if (step==0u || step>6u || pending_phase!=0u || generation!=pending_generation
+    if ((BOARD_ALIGNMENT_MODE && (step!=1u || ticks.u!=60u || ticks.v!=0u || ticks.w!=0u))
+        || step==0u || step>=BOARD_SEQUENCE_POINTS || pending_phase!=0u || generation!=pending_generation
         || (ticks.u!=0u && ticks.u!=60u) || (ticks.v!=0u && ticks.v!=60u)
         || (ticks.w!=0u && ticks.w!=60u) || high==0u || high==3u
         || !board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)

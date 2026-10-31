@@ -71,6 +71,26 @@ def main():
         scan_golden=scan_prefix+f"{binascii.crc_hqx(scan_prefix,0xffff):04X}\r\n".encode()
         if scan_actual!=scan_golden or parse_line(scan_actual)["done"]:
             raise RuntimeError("P1A1 target 248B independent cold snapshot mismatch")
+        alignment_goldens=[]
+        for side in (-1,1):
+            exe=output/("alignment_"+str(side)+".exe")
+            run(command+["-DBOARD_ALIGNMENT_MODE="+str(side),*sources,"-lm","-o",exe])
+            text=run([exe])
+            actual=next((line+"\r\n").encode() for line in text.splitlines() if line.startswith("P1A2,"))
+            prefix=("P1A2,00000001,08,00,01,00000000,00000000,"+("01" if side==1 else "FF")+
+                    ",00,00,00,00,0000,00000000,00000000,00020001,00000000,"+
+                    "00,00000000,0000,0000,00000000,00000000,"*2).encode()
+            golden=prefix+f"{binascii.crc_hqx(prefix,0xffff):04X}\r\n".encode()
+            if len(actual)!=183 or actual!=golden or parse_line(actual)["done"]:
+                raise RuntimeError("P1A2 independent cold snapshot golden mismatch")
+            for i in range(183):
+                for bit in range(8):
+                    bad=bytearray(actual);bad[i]^=1<<bit
+                    try: parse_line(bytes(bad))
+                    except ValueError: pass
+                    else: raise RuntimeError("P1A2 accepted single-bit corruption")
+            alignment_goldens.append(actual.decode())
+        evidence["alignment_uart"]={"goldens":alignment_goldens,"bytes":183,"rejected_single_bits":2928}
         for i in range(248):
             for bit in range(8):
                 corrupted=bytearray(scan_actual);corrupted[i]^=1<<bit

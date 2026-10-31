@@ -128,6 +128,7 @@ def main():
                   "tools/session_probe.py", "tests/m1/test_session_probe.py",
                   "tests/m1/test_zero_offset_report.py", "tests/m1/test_calibration_timing.py")]
     own_paths += [root / name for name in ("docs/commutation_scan_design.md", "tools/commutation_report.py", "tests/m1/test_commutation_report.py")]
+    own_paths += [root / name for name in ("docs/electrical_zero_alignment_design.md", "tools/alignment_report.py", "tests/m1/test_alignment_report.py")]
     for path in set(own_paths):
         content = path.read_bytes().decode("utf-8", errors="strict")
         require(content.endswith("\n"), "missing newline: " + str(path.relative_to(root)))
@@ -149,6 +150,7 @@ def main():
     documents += [root / "docs/p1a2a_pwm_preparation.md", root / "docs/first_local_output.md", root / "docs/first_local_output_test20.md"]
     documents += [root / "docs/current_angle_calibration.md"]
     documents += [root / "docs/commutation_scan_design.md"]
+    documents += [root / "docs/electrical_zero_alignment_design.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

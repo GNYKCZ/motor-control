@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--output", type=Path, default=root / "build/m1")
     parser.add_argument("--scan-direction", type=int, choices=(-1,1), default=1,
                         help="编译期扫描方向；无运行期串口选择，不授权实际运动")
+    parser.add_argument("--alignment-side", type=int, choices=(-1,0,1), default=0,
+                        help="显式两点对齐预置侧；0保持七点历史模式，不授权实际运动")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -52,7 +54,8 @@ def main():
         command = [compiler / "armclang.exe", "--target=arm-arm-none-eabi", "-mcpu=cortex-m3",
                    "-mfloat-abi=soft", "-std=c11", "-O2", "-g", "-ffunction-sections", "-fdata-sections",
                    "-Wall", "-Wextra", "-DSTM32F103xB", "-DUSE_HAL_DRIVER", "-D__MICROLIB",
-                   "-DBOARD_SCAN_DIRECTION="+str(arguments.scan_direction)]
+                   "-DBOARD_SCAN_DIRECTION="+str(arguments.scan_direction),
+                   "-DBOARD_ALIGNMENT_MODE="+str(arguments.alignment_side)]
         # 厂家文件原样保留；其警告仍完整记录，自编源码则将全部警告作为错误。
         if "Drivers" not in source.parts:
             command += ["-Werror"]
@@ -86,7 +89,7 @@ def main():
     git_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip() if is_checkout else None
     git_status = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=root, text=True) if is_checkout else "SOURCE COPY: bind by input hashes"
     evidence = {"head": git_head, "worktree_status": git_status, "compiler_version": version,
-                "scan_direction": arguments.scan_direction,
+                "scan_direction": arguments.scan_direction, "alignment_side": arguments.alignment_side,
                 "optimization": "O2", "target": "STM32F103C8", "size_report": size_report,
                 "binary_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
                 "inputs": {str(path.relative_to(root)).replace("\\", "/"):

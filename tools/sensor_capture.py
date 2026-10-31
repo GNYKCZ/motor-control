@@ -46,39 +46,61 @@ def parse_line(raw):
     """严格解析有版本的ASCII行；异常交给保存层，原字节仍保留。设备时间保持原32位值。"""
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
-    if raw.startswith(b"P1A1,"):
-        widths=[8,2,2,2,8,8,2,2,2,2,2,4,8,8,8]+[2,8,4,4]*7+[4]
-        pattern=b"P1A1,"+b",".join(rb"([0-9A-F]{"+str(w).encode()+rb"})" for w in widths)+rb"\r\n"
+    if raw.startswith((b"P1A1,", b"P1A2,")):
+        alignment=raw.startswith(b"P1A2,")
+        name="P1A2" if alignment else "P1A1"
+        header="q c r s f id direction step done reason mask origin start end cfg".split()
+        widths=[8,2,2,2,8,8,2,2,2,2,2,4,8,8,8]
+        if alignment:
+            header += ["requested"]; widths += [8]
+        stride=6 if alignment else 4
+        count=2 if alignment else 7
+        widths += ([2,8,4,4,8,8] if alignment else [2,8,4,4])*count+[4]
+        pattern=name.encode()+b","+b",".join(rb"([0-9A-F]{"+str(w).encode()+rb"})" for w in widths)+rb"\r\n"
         match=re.fullmatch(pattern,raw)
-        if not match or len(raw)!=248:
-            raise ValueError("P1A1 layout mismatch")
+        if not match or len(raw)!=(183 if alignment else 248):
+            raise ValueError(name+" layout mismatch")
         values=[int(v,16) for v in match.groups()]
         if binascii.crc_hqx(raw[:-6],0xFFFF)!=values[-1]:
-            raise ValueError("P1A1 CRC mismatch")
-        fields=dict(zip("q c r s f id direction step done reason mask origin start end cfg".split(),values[:15]))
+            raise ValueError(name+" CRC mismatch")
+        fields=dict(zip(header,values[:len(header)]))
         if fields["c"]!=8 or fields["r"] & 127 > 7 or fields["s"]>5 or fields["direction"] not in (1,255):
-            raise ValueError("P1A1 header mismatch")
+            raise ValueError(name+" header mismatch")
         fields["direction"]=1 if fields["direction"]==1 else -1
-        if fields["step"]>6 or fields["done"]>1 or fields["reason"]>10 or fields["mask"]>127 or fields["origin"]>16383 or fields["cfg"]!=0x10001:
-            raise ValueError("P1A1 scan metadata mismatch")
+        full_mask=(1<<count)-1
+        if fields["step"]>=count or fields["done"]>1 or fields["reason"]>10 or fields["mask"]>full_mask or fields["origin"]>16383 or fields["cfg"]!=(0x20001 if alignment else 0x10001):
+            raise ValueError(name+" sequence metadata mismatch")
         points=[]
-        for i in range(7):
-            n,total,lo,hi=values[15+4*i:19+4*i]
+        for i in range(count):
+            j=len(header)+stride*i
+            n,total,lo,hi=values[j:j+4]
             total=total if total<2**31 else total-2**32
             lo=lo if lo<32768 else lo-65536
             hi=hi if hi<32768 else hi-65536
             if n>64 or not -4000<=lo<=hi<=4000 or not n*lo<=total<=n*hi:
-                raise ValueError("P1A1 point range/sum mismatch")
+                raise ValueError(name+" point range/sum mismatch")
             if not n and (total or lo or hi):
-                raise ValueError("P1A1 empty point contradicts data")
+                raise ValueError(name+" empty point contradicts data")
             if fields["mask"] & (1<<i) and (n<40 or hi-lo>=16):
-                raise ValueError("P1A1 completed point lacks stable samples")
-            points.append(dict(count=n,sum_count=total,minimum=lo,maximum=hi))
-        if fields["done"] and (fields["s"]!=1 or fields["f"] or fields["step"]!=6 or fields["mask"]!=127 or fields["reason"]!=1):
-            raise ValueError("P1A1 completion contradicts status")
-        if not fields["id"] and (fields["start"] or fields["end"] or fields["mask"] or any(p["count"] for p in points)):
-            raise ValueError("P1A1 data without action")
-        return {"format":"P1A1",**fields,"points":points,"crc":values[-1]}
+                raise ValueError(name+" completed point lacks stable samples")
+            point=dict(count=n,sum_count=total,minimum=lo,maximum=hi)
+            if alignment:
+                point.update(start=values[j+4],end=values[j+5])
+                if fields["mask"] & (1<<i) and not 200000 <= (point["end"]-point["start"]) & 0xffffffff <= 203000:
+                    raise ValueError(name+" point timing mismatch")
+            points.append(point)
+        if fields["done"] and (fields["s"]!=1 or fields["f"] or fields["r"] or fields["step"]!=count-1 or fields["mask"]!=full_mask or fields["reason"]!=1):
+            raise ValueError(name+" completion contradicts status")
+        if not fields["id"] and (fields["start"] or fields["end"] or fields["mask"] or any(p["count"] for p in points)
+                                  or (alignment and (fields["requested"] or any(p["start"] or p["end"] for p in points)))):
+            raise ValueError(name+" data without action")
+        if alignment and fields["done"]:
+            gap=(points[1]["start"]-points[0]["end"]) & 0xffffffff
+            if (fields["start"]!=points[0]["start"] or gap>=2000
+                or (fields["end"]-points[1]["end"]) & 0xffffffff > 3000
+                or not 0 < (fields["end"]-fields["requested"]) & 0xffffffff <= 420000):
+                raise ValueError(name+" overall timing mismatch")
+        return {"format":name,**fields,"points":points,"crc":values[-1]}
     if raw.startswith((b"P1Z1,", b"P1I1,", b"P1V1,")):
         current = not raw.startswith(b"P1Z1,")
         widths = [8, 2, 2, 2, 8, 8, 8, 4, 8, 8, 4, 4, 4, 4, 2, 8, 8, 8, 8]
@@ -281,7 +303,7 @@ def save_chunks(chunks, output, metadata):
                     raise ValueError("line exceeds 2048-byte parser bound")
                 record["fields"] = parse_line(line)
                 record["device_time_us"] = record["fields"].get("t")
-                if record["fields"]["format"]=="P1A1":
+                if record["fields"]["format"] in ("P1A1","P1A2"):
                     record["device_time_kind"]="scan_window_only; see start/end, no snapshot timestamp"
                 info["valid_lines"] += 1
             except (ValueError, UnicodeError) as error:
