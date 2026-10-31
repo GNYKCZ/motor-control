@@ -41,22 +41,25 @@ int main(void)
     for (uint16_t angle : {0u,4096u,7453u,16000u}) {
         dq_prepare(angle);motor_log_snapshot_t log;motor_action_t action;CHECK(motor_runtime_read_reply(&log,&action));
         uint32_t event=action.started_us;double iu=0,iv=0,previous_u=0,previous_v=0;
-        for (unsigned k=0u;k<=250u;++k) {
-            now_us=event+k*1000u;
+        for (unsigned k=0u;k<=(BOARD_DQ_VECTOR_DIAGNOSTIC ? 19u : 250u);++k) {
+            if (BOARD_DQ_VECTOR_DIAGNOSTIC) { timer_tick(event+k*1000u-now_us); }
+            else { now_us=event+k*1000u; }
             if (k) { natural_update();TIM1_UP_IRQHandler(); }
             double mean=(active_ticks[0]+active_ticks[1]+active_ticks[2])/5400.0;
             double vu=12.0*(active_ticks[0]/1800.0-mean),vv=12.0*(active_ticks[1]/1800.0-mean);
             double a=std::exp(-5.5*0.000773/0.0008),b=std::exp(-5.5*0.000227/0.0008);
             iu=a*iu+(1-a)*previous_u/5.5;iu=b*iu+(1-b)*vu/5.5;
             iv=a*iv+(1-a)*previous_v/5.5;iv=b*iv+(1-b)*vv/5.5;previous_u=vu;previous_v=vv;
-            now_us+=227u;
+            if (BOARD_DQ_VECTOR_DIAGNOSTIC) { timer_tick(227u); }
+            else { now_us+=227u; }
             sample(true,(uint16_t)std::lround(2027.0+iu/BOARD_NOMINAL_A_PER_COUNT),(uint16_t)std::lround(2028.0+iv/BOARD_NOMINAL_A_PER_COUNT));
             current_loop_poll();
-            if (k<250u) { CHECK(status().state==MOTOR_RUNTIME_ACTIVE); }
+            if (k<(BOARD_DQ_VECTOR_DIAGNOSTIC ? 19u : 250u)) { CHECK(status().state==MOTOR_RUNTIME_ACTIVE); }
+            if (BOARD_DQ_VECTOR_DIAGNOSTIC) { CHECK(active_ticks[0]==900u && active_ticks[1]==900u && active_ticks[2]==900u); }
         }
         CHECK(status().state==MOTOR_RUNTIME_DISABLED && status().fault_flags==0u);check_closed();
         CHECK(motor_runtime_read_reply(&log,&action) && action.reason==MOTOR_ACTION_DURATION);
-        CHECK(action.ended_us-action.started_us==250227u);
+        CHECK(BOARD_DQ_VECTOR_DIAGNOSTIC ? action.ended_us-action.requested_us==20000u : action.ended_us-action.started_us==250227u);
         for (unsigned i=0u;i<260u;++i) { if (current_loop_report_poll()) { std::fputs(scan_wire,stdout); } }
         button_steps(true,21u);button_steps(false,21u);CHECK(enables==1u);
     }
@@ -102,11 +105,26 @@ int main(void)
     for (unsigned k=0u;k<flow_count;++k) { std::fputs(flow_lines[k],stderr); }
     std::fputs("DQ_FAILURE_CAPTURE_END\n",stderr);
     check_closed();
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    // 非零观测误差也不能让PI改变固定三相PWM，积分不采纳。
+    dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));
+    for (unsigned k=0u;k<4u;++k) {
+        dq_frame(action.started_us+k*1000u,2040u,2045u);
+        CHECK(status().state==MOTOR_RUNTIME_ACTIVE);
+        CHECK(pwm_tim1.CCR1.value==900u && pwm_tim1.CCR2.value==900u && pwm_tim1.CCR3.value==900u);
+    }
+    motor_runtime_stop();capture_flow=true;flow_count=0u;
+    for (unsigned k=0u;k<8u;++k) { (void)current_loop_report_poll(); }
+    CHECK(count_flow("P1D0,")==1u && count_flow("P1D1,")==4u);
+    std::fputs("DQ_VECTOR_OBSERVER_BEGIN\n",stderr);
+    for (unsigned k=0u;k<flow_count;++k) { std::fputs(flow_lines[k],stderr); }
+    std::fputs("DQ_VECTOR_OBSERVER_END\n",stderr);check_closed();
+#endif
     // 直接编译main USER3实际前台顺序，低优先任务耗时300us不阻碍先提交电流包。
     dq_prepare();CHECK(motor_runtime_read_reply(&log,&action));now_us+=227u;sample(false,2027u,2028u);
     feedback_delay=300u;production_poll_iteration();feedback_delay=0u;
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE);now_us=action.started_us+1000u;natural_update();TIM1_UP_IRQHandler();
     CHECK(status().state==MOTOR_RUNTIME_ACTIVE);motor_runtime_stop();check_closed();
-    std::puts("PASS actual DQ runtime/board/current_control: zero and fixed signed references, four angles, bounded RL, trace, STOP/Break, mailbox overwrite, raw trip, movement, deadline, one gesture");
+    std::puts(BOARD_DQ_VECTOR_DIAGNOSTIC ? "PASS fixed equal-PWM diagnostic: no PI application, independent20ms deadline, biased observer, unchanged trips/STOP/Break; no closed-loop acceptance" : "PASS actual DQ runtime/board/current_control: zero and fixed signed references, four angles, bounded RL, trace, STOP/Break, mailbox overwrite, raw trip, movement, deadline, one gesture");
     return 0;
 }

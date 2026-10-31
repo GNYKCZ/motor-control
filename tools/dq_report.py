@@ -49,6 +49,19 @@ def finish_block(header,points,trip):
             first_trip=trip,first_trip_name=names.get(trip['reason']) if trip else 'unavailable',
             trace_records=len(points),trace_index_complete=len(points)==header['count'] and [p['index'] for p in points]==list(range(len(points))),
             calibration_verified=False,limits='Diagnostic fault block; does not pass250ms tracking acceptance')
+    if header['cfg']==0x40002:
+        if header['ref'] or header['zero']!=7453 or header['pole_pairs']!=7 or header['reason']!=4 or header['bench']!=32 or header['failed'] or header['compute']>200 or header['latency']:
+            raise ValueError('Zero-vector diagnostic qualification')
+        if not 15<=header['count']<=20 or len(points)!=header['count']:
+            raise ValueError('Zero-vector observation count')
+        for i,p in enumerate(points):
+            if p['index']!=i or p['reference'] or p['vd'] or p['vq'] or p['latency'] or p['limited'] or p['compute']>200 or abs(p['id'])>80 or abs(p['iq'])>80 or p['angle']>16383:
+                raise ValueError('Diagnostic is not a fixed zero-vector record')
+            if i and ((p['sequence']-points[i-1]['sequence'])&0xffffffff!=1 or not 990<=(p['t']-points[i-1]['t'])&0xffffffff<=1010):
+                raise ValueError('Diagnostic raw sequence gap')
+        return dict(status='DIAGNOSTIC_COMPLETE',accepted=False,diagnostic_only=True,configuration=header,
+            points=len(points),maximum_abs_id_mA=max(abs(p['id']) for p in points),maximum_abs_iq_mA=max(abs(p['iq']) for p in points),
+            calibration_verified=False,limits='Fixed equal PWM, PI never applied; this is not closed-loop acceptance')
     return analyze(header,points)
 
 def reports(raw):

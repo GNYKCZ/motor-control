@@ -19,7 +19,7 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
 #if BOARD_SCAN_ENABLED
 #if BOARD_DQ_CURRENT_LOOP
-static const pwm_profile_t local_profile = {{900u,900u,900u,144u},3000u,270000u};
+static const pwm_profile_t local_profile = {{900u,900u,900u,144u},3000u,BOARD_DQ_VECTOR_DIAGNOSTIC ? 20000u : 270000u};
 #elif BOARD_SINGLE_U
 static const pwm_profile_t local_profile = {{900u,0u,0u,144u},3000u,420000u};
 #elif BOARD_ALIGNMENT_MODE == 1
@@ -96,6 +96,9 @@ static void expire_output(uint32_t now)
     } else if (BOARD_SCAN_ENABLED && scan_pending && (int32_t)(now-scan_submit_deadline_us)>=0) {
         scan_capture.reason=6u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION);
     } else if ((int32_t)(now-((runtime_status.state==MOTOR_RUNTIME_ARMED || (BOARD_SINGLE_U && runtime_status.state==MOTOR_RUNTIME_STARTING)) ? arm_deadline_us : pulse_deadline_us))>=0) {
+        if (BOARD_DQ_VECTOR_DIAGNOSTIC && runtime_status.state==MOTOR_RUNTIME_ACTIVE) {
+            last_action.reason=MOTOR_ACTION_DURATION;motor_runtime_stop();return;
+        }
         if (BOARD_SCAN_ENABLED) {
             scan_capture.reason=9u; motor_runtime_latch_fault(MOTOR_FAULT_CALIBRATION); return;
         }
@@ -585,7 +588,8 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
             int32_t detail=why==1u ? du : (why==2u ? dv : (why==3u ? -du-dv : 0));
             current_loop_capture_trip(why,sample,detail);
             motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
-        } else if (sample->current_completed_us-last_action.started_us>=250000u) {
+        } else if (BOARD_DQ_VECTOR_DIAGNOSTIC ? (int32_t)(sample->current_completed_us-pulse_deadline_us)>=0
+                   : sample->current_completed_us-last_action.started_us>=250000u) {
             last_action.reason=MOTOR_ACTION_DURATION;motor_runtime_stop();
         } else { current_loop_queue(sample); }
     }

@@ -265,7 +265,9 @@ void command_enable_version_report(void)
 static bool report_version(void)
 {
 #if BOARD_DQ_CURRENT_LOOP
-#if BOARD_DQ_REFERENCE_MA == 0
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+#define FIRMWARE_MODE "DQ_VEC0"
+#elif BOARD_DQ_REFERENCE_MA == 0
 #define FIRMWARE_MODE "DQ_ZERO"
 #elif BOARD_DQ_REFERENCE_MA == 40
 #define FIRMWARE_MODE "DQ_POS40"
@@ -317,7 +319,7 @@ static void local_flow_poll(uint32_t now_us)
         if (!flow_result_seen) {
             flow_result_seen=true; flow_state=FLOW_FINISHED;
             flow_result_pending=true;
-            flow_notice=(!status.fault_flags && action.reason==MOTOR_ACTION_DURATION) ? 8u : 9u;
+            flow_notice=(!status.fault_flags && action.reason==MOTOR_ACTION_DURATION) ? (BOARD_DQ_VECTOR_DIAGNOSTIC ? 12u : 8u) : 9u;
         }
         return; /* 有动作后永不自动重开零偏，不返还手势。 */
     }
@@ -353,7 +355,7 @@ static bool local_flow_notice(void)
     static const char *const lines[]={"", "P1F1,WAIT_STILL\r\n", "P1F1,COLLECT_ZERO\r\n",
         "P1F1,READY_PRESS_PA12\r\n", "P1F1,FAILED_INPUT\r\n", "P1F1,FAILED_NOT_STILL\r\n",
         "P1F1,FAILED_ZERO_INVALID\r\n", "P1F1,FAILED_ZERO_TIMEOUT\r\n",
-        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n", "P1F1,FAILED_CONTROL_TIMING\r\n"};
+        "P1F1,ACTION_DONE\r\n", "P1F1,ACTION_FAILED\r\n", "P1F1,FAILED_STOP\r\n", "P1F1,FAILED_CONTROL_TIMING\r\n", "P1F1,VECTOR_DIAG_DONE\r\n"};
     if (!flow_enabled || !flow_notice) { return false; }
     if (board_serial_is_busy()) { return true; }
     const char *line=lines[flow_notice]; uint32_t length=0u;

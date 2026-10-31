@@ -123,6 +123,18 @@ void current_loop_poll(void)
         current_loop_capture_trip(why,&sample,milli(detail));
         motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);return;
     }
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* 只取当前坐标观测；不采用PI计算的电压或积分，不再提交三相CCR更新。
+     * 启动后CCR固定900/900/900；诊断记录latency0表示没有新的控制提交。 */
+    mask=board_enter_critical();
+    if (generation==mine && motor_runtime_current_sample_matches(mine,sample.sequence,sample.current_completed_us)) {
+        state=(current_control_state_t){0};pending_state=state;
+        points[used++]=(loop_point_t){sample.current_completed_us,sample.sequence,milli(result.measured.current_d_A),
+            milli(result.measured.current_q_A),0,0,0,(uint16_t)cost,0u,0u,sample.encoder.raw_angle_count};
+        last_sequence=sample.sequence;last_sample_us=sample.current_completed_us;action_start=action.started_us;
+    }
+    board_leave_critical(mask);return;
+#endif
     board_pwm_ticks_t ticks={(uint16_t)lroundf(result.modulation.duty_u*1800.0f),
         (uint16_t)lroundf(result.modulation.duty_v*1800.0f),(uint16_t)lroundf(result.modulation.duty_w*1800.0f),144u};
     mask=board_enter_critical();
@@ -166,7 +178,7 @@ bool current_loop_report_poll(void)
     bool sending_header=header_pending,sending_trip=!sending_header && trip_pending;
     line_length=5u;
     if (sending_header) {
-        memcpy(line,"P1D0,",5u);word(0x00040001u);word((uint32_t)BOARD_DQ_REFERENCE_MA);word(used);
+        memcpy(line,"P1D0,",5u);word(BOARD_DQ_PROFILE_ID);word((uint32_t)BOARD_DQ_REFERENCE_MA);word(used);
         word(maximum_compute);word(maximum_latency);word(benchmark_step);word(benchmark_failed);word(action_start);
         word(offset.sum_u_count);word(offset.sum_v_count);word(calibration.zero_count);word(calibration.pole_pairs);
         motor_log_snapshot_t status;motor_action_t action;

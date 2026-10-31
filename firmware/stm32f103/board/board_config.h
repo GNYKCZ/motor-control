@@ -3,7 +3,7 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_FIRMWARE_VERSION "31-22-09" /**< 2026-10-31 22:09，Asia/Shanghai；固件变更时更新。 */
+#define BOARD_FIRMWARE_VERSION "31-22-40" /**< 2026-10-31 22:40，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
 #define BOARD_SAMPLING_PROFILE_ID 0x00030001u /**< 20kHz PWM、175us SSI/225us ADC、1kHz原始流；单U400ms配置。 */
 /* 正式ARM默认零指令电流闭环；历史host夹具显式测试旧流程，新夹具用-D启用本路径。 */
@@ -14,8 +14,20 @@
 #define BOARD_DQ_CURRENT_LOOP 0
 #endif
 #endif
+/* 当前交付为用户确认的固定零矢量诊断；历史host闭环回归显式/默认关闭此模式。 */
+#ifndef BOARD_DQ_VECTOR_DIAGNOSTIC
+#if defined(__arm__) || defined(__ARM_ARCH)
+#define BOARD_DQ_VECTOR_DIAGNOSTIC 1
+#else
+#define BOARD_DQ_VECTOR_DIAGNOSTIC 0
+#endif
+#endif
+#define BOARD_DQ_PROFILE_ID (BOARD_DQ_VECTOR_DIAGNOSTIC ? 0x00040002u : 0x00040001u)
 #ifndef BOARD_DQ_REFERENCE_MA
 #define BOARD_DQ_REFERENCE_MA 0
+#endif
+#if BOARD_DQ_VECTOR_DIAGNOSTIC && (!BOARD_DQ_CURRENT_LOOP || BOARD_DQ_REFERENCE_MA != 0)
+#error "Fixed zero-vector diagnosis requires DQ infrastructure and zero reference"
 #endif
 #if BOARD_DQ_REFERENCE_MA != 0 && BOARD_DQ_REFERENCE_MA != 40 && BOARD_DQ_REFERENCE_MA != -40
 #error "Only zero or separately arranged +/-40mA fixed experiments are supported"
