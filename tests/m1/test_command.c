@@ -254,16 +254,18 @@ int main(void)
 #if BOARD_ALIGNMENT_MODE
     start();hold_angle=true;live_samples=true;count_automatic=true;command_enable_local_flow();
     automatic_ticks(1200u);
-    CHECK(automatic_zero==1u && automatic_ready==1u && automatic_fail==0u);
-    CHECK(!fake_pwm && motor_runtime_zero_is_ready());
+    /* 此旧UART夹具明确没有可用PWM设备；应发送完整零偏与失败，不能谎报READY。
+     * 真正board_pwm的READY/按键/动作完整流另在寄存器模型验证。 */
+    CHECK(automatic_zero==1u && automatic_ready==0u && automatic_fail==1u);
+    CHECK(!fake_pwm && !motor_runtime_zero_is_ready());
     CHECK(motor_runtime_read_zero(&snap,&zero));uint32_t automatic_began=zero.began_us;
     command_enable_local_flow();automatic_ticks(100u);
-    CHECK(automatic_zero==1u && automatic_ready==1u && !fake_pwm);
+    CHECK(automatic_zero==1u && automatic_ready==0u && automatic_fail==1u && !fake_pwm);
     CHECK(motor_runtime_read_zero(&snap,&zero) && zero.began_us==automatic_began);
     // 自动数据不占用用户序号1；STOP回执和自动失败提示都经真实UART发送。
-    feed(vector(1u,2u));automatic_ticks(100u);
+    feed(vector(1u,2u));reply_done();CHECK(result()==0u);
     CHECK(automatic_fail==1u && !fake_pwm);
-    puts("PASS automatic prepare through production UART: zero/READY once, enable idempotent, sequence untouched, STOP cancels, no output");
+    puts("PASS automatic prepare through production UART: zero/failure once with unavailable PWM, no false READY, enable idempotent, sequence untouched, STOP preserved, no output");
 #endif
     return 0;
 }
