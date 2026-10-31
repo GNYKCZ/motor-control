@@ -4,8 +4,12 @@
 #include "motor_runtime.h"
 #include "main.h"
 #include "board_config.h"
+#include "current_loop.h"
 
 static uint32_t pending_generation;
+#if BOARD_DQ_CURRENT_LOOP
+static uint32_t pending_current_sequence,pending_sample_us;
+#endif
 static unsigned pending_scan_step;
 static uint16_t largest_tick, window_margin;
 static unsigned pending_phase; /**< 0无请求，1等零值UEV，4等单U励磁UEV；旧模式2等共同低窗、3等点提交。 */
@@ -52,6 +56,11 @@ bool board_output_is_ready(void)
     bool timing_ready;
 #if BOARD_SINGLE_U
     timing_ready=TIM1->PSC==0u && TIM1->ARR==1800u && board_sampling_phase_is_ready();
+#if BOARD_DQ_CURRENT_LOOP
+    timing_ready=timing_ready && TIM1->RCR==39u && (TIM1->CR1 & TIM_CR1_CMS)==TIM_CR1_CMS
+        && (TIM1->CCMR1 & (TIM_CCMR1_OC1PE | TIM_CCMR1_OC2PE))==(TIM_CCMR1_OC1PE | TIM_CCMR1_OC2PE)
+        && (TIM1->CCMR2 & TIM_CCMR2_OC3PE)!=0u;
+#endif
 #else
     timing_ready=TIM1->PSC==9u && TIM1->ARR==1799u;
 #endif
@@ -68,10 +77,10 @@ bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation)
     if (ticks.w>maximum) { maximum=ticks.w; }
     if (!board_output_is_ready() || ticks.margin_ticks==0u
         || maximum+2u*ticks.margin_ticks>=TIM1->ARR || TIM1->ARR!=(BOARD_SINGLE_U ? 1800u : 1799u)
-        || (BOARD_SINGLE_U && (ticks.u!=900u || ticks.v || ticks.w || ticks.margin_ticks!=144u))) { return false; }
+        || (BOARD_SINGLE_U && (ticks.u!=900u || ticks.v!=(BOARD_DQ_CURRENT_LOOP ? 900u : 0u) || ticks.w!=(BOARD_DQ_CURRENT_LOOP ? 900u : 0u) || ticks.margin_ticks!=144u))) { return false; }
     board_disable_output();
     board_prepare_output_idle();
-    TIM1->CCR1=BOARD_SINGLE_U ? 0u : ticks.u; TIM1->CCR2=ticks.v; TIM1->CCR3=ticks.w;
+    TIM1->CCR1=BOARD_SINGLE_U ? 0u : ticks.u; TIM1->CCR2=BOARD_SINGLE_U ? 0u : ticks.v; TIM1->CCR3=BOARD_SINGLE_U ? 0u : ticks.w;
     largest_tick=(uint16_t)maximum; window_margin=ticks.margin_ticks;
     /* 在同一允许窗口的首个tick发比较事件，为IRQ进入/资格复核留出余量。
      * 不改变窗口边界；迟到仍拒绝，本次请求不等下一圈重试。 */
@@ -115,6 +124,17 @@ void TIM1_UP_IRQHandler(void)
         TIM1->SR=~TIM_SR_UIF;
         TIM1->DIER &= ~TIM_DIER_UIE;
 #if BOARD_SINGLE_U
+#if BOARD_DQ_CURRENT_LOOP
+        if (pending_phase==5u) {
+            uint32_t event=0u;
+            if (!board_get_update_time_us(&event) || !board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)
+                || !motor_runtime_current_is_active(pending_generation) || event-pending_sample_us<740u
+                || event-pending_sample_us>810u
+                || !current_loop_applied(pending_generation,pending_current_sequence,event)) {
+                motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
+            } else { pending_phase=0u; }
+        } else
+#endif
         if (pending_phase==1u || pending_phase==4u) {
             uint32_t event_us=0u;
             if (!board_get_update_time_us(&event_us) || !board_output_is_ready()
@@ -126,7 +146,10 @@ void TIM1_UP_IRQHandler(void)
                 if (!board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)) {
                     motor_runtime_latch_fault(MOTOR_FAULT_DEVICE);
                 } else {
-                    TIM1->CCR1=900u; /* 只有U从0改变；V/W始终0，避免三相混合更新事务。 */
+                    TIM1->CCR1=900u;
+#if BOARD_DQ_CURRENT_LOOP
+                    TIM1->CCR2=900u;TIM1->CCR3=900u; /* 启动为三路50%零电压矢量。 */
+#endif
                     uint32_t checked_event=0u;
                     if (!board_get_update_time_us(&checked_event) || (TIM1->SR & TIM_SR_UIF)!=0u
                         || (int32_t)(checked_event-event_us)>4 || (int32_t)(checked_event-event_us)<-4) {
@@ -253,3 +276,23 @@ void TIM3_IRQHandler(void)
         motor_runtime_check_deadline(board_get_time_us());
     }
 }
+
+#if BOARD_DQ_CURRENT_LOOP
+bool board_submit_current(board_pwm_ticks_t ticks,uint32_t generation,uint32_t sequence,uint32_t sample_us)
+{
+    uint32_t event=0u;uint32_t began=board_get_time_us_locked();
+    /* ADC在225us附近完成。只在本UEV后至500us前写入；距离下一UEV至少500us。
+     * 三个APB写无等待/调用；20us复核是故障检测，不能靠放宽它支持迟到提交。 */
+    if (pending_phase || generation!=pending_generation || !board_output_is_ready()
+        || !(TIM1->BDTR & TIM_BDTR_MOE) || !motor_runtime_current_sample_matches(generation,sequence,sample_us)
+        || !board_get_update_time_us(&event) || began-event<225u || began-event>500u
+        || began-sample_us>450u || ticks.u<848u || ticks.u>952u || ticks.v<848u || ticks.v>952u
+        || ticks.w<848u || ticks.w>952u) { return false; }
+    TIM1->SR=~TIM_SR_UIF;
+    TIM1->CCR1=ticks.u;TIM1->CCR2=ticks.v;TIM1->CCR3=ticks.w;
+    if ((TIM1->SR & TIM_SR_UIF) || board_get_time_us_locked()-began>20u
+        || !board_output_is_ready() || !(TIM1->BDTR & TIM_BDTR_MOE)) { board_disable_output();return false; }
+    pending_current_sequence=sequence;pending_sample_us=sample_us;pending_phase=5u;TIM1->DIER |= TIM_DIER_UIE;
+    return true;
+}
+#endif

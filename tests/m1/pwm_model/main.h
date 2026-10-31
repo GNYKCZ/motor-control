@@ -18,7 +18,7 @@ struct PwmRegister {
     PwmRegister &operator&=(uint32_t v) { uint32_t old=*this; return operator=(old&v); }
 };
 struct PwmTimer {
-    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR,PSC;
+    PwmRegister BDTR,CCR1,CCR2,CCR3,CCR4,SR,CCER,CR1,DIER,CNT,ARR,EGR,PSC,RCR,CCMR1,CCMR2;
     explicit PwmTimer(bool first):BDTR(first?R_BDTR:R_OTHER),CCR1(first?R_CCR1:R_CCR31),
         CCR2(R_CCR2),CCR3(R_CCR3),CCR4(R_CCR4),SR(first?R_SR1:R_SR3),CCER(R_CCER),EGR(R_EGR) {}
 };
@@ -50,6 +50,10 @@ extern PwmGpio pwm_gpioa,pwm_gpiob;
 #define TIM_SR_CC1IF (1u<<1)
 #define TIM_SR_CC4IF (1u<<4)
 #define TIM_SR_BIF (1u<<7)
+#define TIM_CR1_CMS (3u<<5)
+#define TIM_CCMR1_OC1PE (1u<<3)
+#define TIM_CCMR1_OC2PE (1u<<11)
+#define TIM_CCMR2_OC3PE (1u<<3)
 #define TIM_CR1_CEN (1u<<0)
 #define TIM_CR1_DIR (1u<<4)
 #define __HAL_RCC_GPIOA_CLK_ENABLE() ((void)0)

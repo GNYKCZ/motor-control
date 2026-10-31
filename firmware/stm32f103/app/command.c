@@ -150,7 +150,8 @@ void command_receive_byte(uint8_t byte, uint32_t now_us)
             if (have_sequence && (advance==0u || advance>=0x80000000u)) { result=REPLY_SEQUENCE; }
             else {
                 have_sequence=true; last_sequence=rx_sequence;
-                if (rx_code==REQUEST_ZERO_RESTART) {
+                if (BOARD_DQ_CURRENT_LOOP && (rx_code==REQUEST_SCAN_STATUS || rx_code==REQUEST_CURRENT_STATUS)) { result=REPLY_DENIED; }
+                else if (rx_code==REQUEST_ZERO_RESTART) {
                     if (!motor_runtime_restart_zero()) { result=REPLY_DENIED; }
                 } else if (rx_code!=REQUEST_STATUS && rx_code!=REQUEST_STOP && rx_code!=REQUEST_ZERO_STATUS
                            && rx_code!=(BOARD_SCAN_ENABLED ? REQUEST_SCAN_STATUS : REQUEST_CURRENT_STATUS)) {
@@ -262,7 +263,15 @@ void command_enable_version_report(void)
 
 static bool report_version(void)
 {
-#if BOARD_SINGLE_U
+#if BOARD_DQ_CURRENT_LOOP
+#if BOARD_DQ_REFERENCE_MA == 0
+#define FIRMWARE_MODE "DQ_ZERO"
+#elif BOARD_DQ_REFERENCE_MA == 40
+#define FIRMWARE_MODE "DQ_POS40"
+#else
+#define FIRMWARE_MODE "DQ_NEG40"
+#endif
+#elif BOARD_SINGLE_U
 #define FIRMWARE_MODE "SINGLE_U"
 #elif defined(MOTOR_GATE_TEST_PROFILES)
 #define FIRMWARE_MODE "GATE_TEST"
@@ -366,7 +375,7 @@ bool command_poll(uint32_t now_us)
         else if (flow_zero_pending) {
             reply=(reply_event_t){0u,REQUEST_ZERO_STATUS,flow_zero_result}; flow_zero_pending=false; pending=true;
         } else if (flow_result_pending) {
-            reply=(reply_event_t){0u,REQUEST_SCAN_STATUS,REPLY_OK}; flow_result_pending=false; pending=true;
+            reply=(reply_event_t){0u,BOARD_DQ_CURRENT_LOOP ? REQUEST_STATUS : REQUEST_SCAN_STATUS,REPLY_OK}; flow_result_pending=false; pending=true;
         }
         board_leave_critical(mask);
         if (!pending) { return report_version() || local_flow_notice(); }

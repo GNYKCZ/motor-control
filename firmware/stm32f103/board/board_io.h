@@ -25,6 +25,8 @@ bool board_output_is_ready(void);
 bool board_prepare_pulse(board_pwm_ticks_t ticks, uint32_t generation);
 /** ACTIVE扫描点预装：不写MOE、不用UG；下一自然UEV确认，失败先禁止调制。 */
 bool board_update_scan_point(board_pwm_ticks_t ticks, uint32_t generation, unsigned step);
+/** 当前环三相预装载；调用者持锁，目标为下一自然UEV，迟到/不安全采样窗拒绝。 */
+bool board_submit_current(board_pwm_ticks_t ticks,uint32_t generation,uint32_t sequence,uint32_t sample_us);
 /** 已持锁：设最近绝对设备us期限，比较值越过则返回false，禁止等16bit回绕。 */
 bool board_schedule_deadline(uint32_t deadline_us);
 /** 已持锁取消TIM3比较中断，不停止独立时基。 */

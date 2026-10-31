@@ -3,9 +3,23 @@
 #ifndef BOARD_CONFIG_H
 #define BOARD_CONFIG_H
 
-#define BOARD_FIRMWARE_VERSION "31-17-27" /**< 2026-10-31 17:27，Asia/Shanghai；固件变更时更新。 */
+#define BOARD_FIRMWARE_VERSION "31-18-45" /**< 2026-10-31 18:45，Asia/Shanghai；固件变更时更新。 */
 #define BOARD_DEVICE_TIME_HZ 1000000u       /**< 设备时间：每 tick 为 1 us。 */
 #define BOARD_SAMPLING_PROFILE_ID 0x00030001u /**< 20kHz PWM、175us SSI/225us ADC、1kHz原始流；单U400ms配置。 */
+/* 正式ARM默认零指令电流闭环；历史host夹具显式测试旧流程，新夹具用-D启用本路径。 */
+#ifndef BOARD_DQ_CURRENT_LOOP
+#if defined(__arm__) || defined(__ARM_ARCH)
+#define BOARD_DQ_CURRENT_LOOP 1
+#else
+#define BOARD_DQ_CURRENT_LOOP 0
+#endif
+#endif
+#ifndef BOARD_DQ_REFERENCE_MA
+#define BOARD_DQ_REFERENCE_MA 0
+#endif
+#if BOARD_DQ_REFERENCE_MA != 0 && BOARD_DQ_REFERENCE_MA != 40 && BOARD_DQ_REFERENCE_MA != -40
+#error "Only zero or separately arranged +/-40mA fixed experiments are supported"
+#endif
 /* 外设时钟/ARR/RCR/比较值只由 m1_sampling.ioc 生成，不在本头复制第二套参数。 */
 #define BOARD_ENCODER_TRANSFER_LIMIT_US 40u /**< 24 bit / 1.125 MHz 约 21.34 us，40 us 为软件上限。 */
 #define BOARD_ENCODER_AGE_LIMIT_US 200u     /**< 从读取开始到 ADC 完成的最大年龄，未实测。 */
@@ -27,6 +41,9 @@
 #error "Alignment cannot use host-only legacy profiles"
 #endif
 #define BOARD_SINGLE_U (BOARD_ALIGNMENT_MODE == 2)
+#if BOARD_DQ_CURRENT_LOOP && !BOARD_SINGLE_U
+#error "DQ control requires the reviewed 20kHz single-U timer configuration"
+#endif
 #define BOARD_SEQUENCE_POINTS (BOARD_SINGLE_U ? 1u : (BOARD_ALIGNMENT_MODE ? 2u : 7u))
 #define BOARD_SEQUENCE_LIMIT_US (BOARD_ALIGNMENT_MODE ? 420000u : 1420000u)
 #ifndef BOARD_SCAN_DIRECTION

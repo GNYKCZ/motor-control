@@ -73,3 +73,11 @@ U4实际装配、SPI波形/实时预算、复位瞬态和功率电气效果需�
 P1a1仅参考原USART2收发模式和H8/PA3连接事实，新增自编[command](app/command.c)与
 [UART适配](board/board_uart.c)，原ADC/FOC USER CODE与自动对齐均未迁入。
 [协议和验收](../../docs/p1a1_command_link.md)区分软件回归与未执行的RX现场往返；PWM仍永久禁止。
+
+
+## 2026-10-31受限d/q闭环增量
+
+前文“不接入PI/无使能”是早期M2阶段历史范围。当前[current_loop](app/current_loop.c)复用canonical
+[current_control](../../control_core/current_control.c)和[foc_math](../../control_core/foc_math.c)，未复制例程算法。
+外设生成配置不变；runtime拥有生命周期，board拥有三相同步预装载；详细[闭环契约与候选板验](../../docs/dq_current_loop.md)。
+正式默认零指令，软件/目标构建不替代实机跟踪、绝对电流或高阻关断验收。

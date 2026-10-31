@@ -30,7 +30,7 @@ def main():
     require("Firmware version: "+version[1]+" |" in (firmware / "Core/Src/main.c").read_text(encoding="utf-8"),"main.c firmware version differs from serial version")
     project = json.loads((firmware / "project_sources.json").read_text(encoding="utf-8"))
     shared_files = {root / "control_core" / (name + suffix)
-                    for name in ("sensor_input", "feedback") for suffix in (".c", ".h")}
+                    for name in ("sensor_input", "feedback", "foc_math", "current_control") for suffix in (".c", ".h")}
     for relative in project["sources"] + project["includes"] + [project["startup"], project["scatter"]]:
         path = (firmware / relative).resolve()
         require((path.is_relative_to(firmware) or path in shared_files or path == root / "control_core")
@@ -154,7 +154,7 @@ def main():
     documents += [root / "docs/p1a2a_pwm_preparation.md", root / "docs/first_local_output.md", root / "docs/first_local_output_test20.md"]
     documents += [root / "docs/current_angle_calibration.md"]
     documents += [root / "docs/commutation_scan_design.md"]
-    documents += [root / "docs/electrical_zero_alignment_design.md"]
+    documents += [root / "docs/electrical_zero_alignment_design.md", root / "docs/dq_current_loop.md"]
     checked_links = 0
     for path in documents:
         content = path.read_text(encoding="utf-8")

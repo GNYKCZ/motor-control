@@ -135,6 +135,10 @@ bool motor_runtime_commit_output(uint32_t generation);
 bool motor_runtime_start_is_valid_at(uint32_t generation, uint32_t now_us);
 /** 单U最终短事务：调用者持锁并提供刚取得的设备时间；仅查运行态/代次/资格，不读硬件或重取时间。 */
 bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us);
+/** 电流环提交前持锁检查运行态/代次/当前输入；不改变状态。 */
+bool motor_runtime_current_is_active(uint32_t generation);
+/** 提交必须仍对应最新完整原始帧，禁止前台旧计算覆盖新输入。 */
+bool motor_runtime_current_sample_matches(uint32_t generation,uint32_t sequence,uint32_t sample_us);
 /** board持锁：开门事务前后核对绝对期限，不调度、不复制状态。 */
 bool motor_runtime_output_deadline_reached(uint32_t now_us);
 /** UART错误/格式/CRC/超时：仅ARMED/STARTING/ACTIVE锁存通信故障并先停。 */

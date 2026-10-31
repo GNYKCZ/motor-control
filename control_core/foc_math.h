@@ -1,5 +1,5 @@
 /** FOC 纯数学接口：输入已校准电流/已知电角度或目标电压，输出值对象交给调用者。
- * 本模块无可变全局状态、HAL/设备依赖或使能能力；当前只由主机测试调用。
+ * 本模块无可变全局状态、HAL/设备依赖或使能能力；由主机测试与受控板级电流环复用。
  * 调用者独占输出对象，函数不保留指针；可用不同对象交错调用，不需要init/reset。 */
 #ifndef FOC_MATH_H
 #define FOC_MATH_H
@@ -35,7 +35,7 @@ bool foc_transform_current(float current_u_A, float current_v_A,
  * result须为调用者独占可写对象；NULL返回false。成功置is_valid并返回true。
  * 非法输入/数值异常返回false，非空输出全部清零、标志false；失败数值不能作为硬件命令。
  * 内部double、公开float，返回受限模型电压；量化误差见数学契约，不代表真实施加电压。
- * 无任何设备写入、使能或可变内部状态，当前没有接入固件控制路径。 */
+ * 无任何设备写入、使能或可变内部状态，由板级受控电流环调用，硬件使能仍归board/runtime。 */
 bool foc_modulate_voltage(float target_voltage_d_V, float target_voltage_q_V,
     float electrical_angle_rad, float bus_voltage_V, float modulation_limit,
     foc_modulation_t *result);

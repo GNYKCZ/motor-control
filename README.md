@@ -67,3 +67,8 @@ ARM/PULSE明确拒绝；用户已有一次COM9的STATUS严格匹配回执，开�
 - [迁移依据与研究参考](docs/ai_review_basis.md)：源仓库版本、2026 年研究启发、采用方式及限制。
 
 本包对应 [实物路线图 #1](https://github.com/GNYKCZ/motor-control/issues/1) 与 [仿真路线图 #2](https://github.com/GNYKCZ/motor-control/issues/2)。文档交付不代表这些路线图已实现。首次开发确定用户授权的可验收工作包，可包含多个依赖步骤；包内连续推进，不能从路线图推断无限授权。小改动设计写PR说明，重大架构/物理语义另审；缺少编译器、MATLAB或板端数据时如实记录缺口。
+
+
+当前Issue #1增量：默认Keil目标准备[受限d/q电流闭环](docs/dq_current_loop.md)，
+零参考、PA12一次手势、1kHz控制/20kHz载波、停机后有限RAM记录。软件实现与板端跟踪验收分别记录，
+单U结果仅给条件电零位候选，尚不代表完整P1冻结或绝对电流标定。

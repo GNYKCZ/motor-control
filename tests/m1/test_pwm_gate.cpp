@@ -141,11 +141,15 @@ static void reset(uint32_t base=0u)
 #endif
     trace=false;inject_at=0u;inject_kind=0u;access_count=0u;queued_stop=false;mask=0u;
     advancing_ticks=0u;fraction_ticks=0u;
-    fixed_angle=false; delay_after_moe=false; fixed_count=0u;
+    fixed_angle=BOARD_DQ_CURRENT_LOOP!=0; delay_after_moe=false; fixed_count=0u;
     update_lag=0u;update_us=base;clock_step=0u;enables=0u;early_enables=0u;ug_writes=0u;sequence=0u;now_us=base;
     pwm_tim1.BDTR.value=TIM_BDTR_BKE | TIM_BDTR_OSSI | TIM_BDTR_OSSR;
     pwm_tim1.CCER.value=0u;pwm_tim1.DIER.value=0u;pwm_tim1.SR.value=0u;
     pwm_tim1.PSC.value=BOARD_SINGLE_U ? 0u : 9u;pwm_tim1.ARR.value=BOARD_SINGLE_U ? 1800u : 1799u;pwm_tim1.CR1.value=TIM_CR1_CEN;pwm_tim1.CNT.value=0u;
+    #if BOARD_DQ_CURRENT_LOOP
+    pwm_tim1.CR1.value |= TIM_CR1_CMS;pwm_tim1.RCR.value=39u;
+    pwm_tim1.CCMR1.value=TIM_CCMR1_OC1PE | TIM_CCMR1_OC2PE;pwm_tim1.CCMR2.value=TIM_CCMR2_OC3PE;
+#endif
     pwm_tim1.CCR1.value=0u;pwm_tim1.CCR2.value=0u;pwm_tim1.CCR3.value=0u;
     pwm_gpiob.IDR.value=GPIO_PIN_12;pwm_gpioa.CRH.value=0xa5bcd222u;
     motor_runtime_init();command_init();board_initialize_output();motor_runtime_finish_boot(true);

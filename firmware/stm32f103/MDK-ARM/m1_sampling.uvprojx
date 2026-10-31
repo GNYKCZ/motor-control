@@ -451,6 +451,21 @@
               <FileType>1</FileType>
               <FilePath>../../../control_core/feedback.c</FilePath>
             </File>
+            <File>
+              <FileName>current_loop.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../app/current_loop.c</FilePath>
+            </File>
+            <File>
+              <FileName>current_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../../../control_core/current_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>foc_math.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../../../control_core/foc_math.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

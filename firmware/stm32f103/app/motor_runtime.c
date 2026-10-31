@@ -3,6 +3,7 @@
 #include "motor_runtime.h"
 #include "board_config.h"
 #include "board_io.h"
+#include "current_loop.h"
 #include <stddef.h>
 
 #if (defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE)) && (defined(__ARM_ARCH) || defined(__arm__))
@@ -17,7 +18,9 @@ static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 #ifndef MOTOR_GATE_TEST_PROFILES
 /* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
 #if BOARD_SCAN_ENABLED
-#if BOARD_SINGLE_U
+#if BOARD_DQ_CURRENT_LOOP
+static const pwm_profile_t local_profile = {{900u,900u,900u,144u},3000u,270000u};
+#elif BOARD_SINGLE_U
 static const pwm_profile_t local_profile = {{900u,0u,0u,144u},3000u,420000u};
 #elif BOARD_ALIGNMENT_MODE == 1
 static const pwm_profile_t local_profile = {{60u,60u,0u,434u},5000u,420000u};
@@ -181,6 +184,9 @@ static void motor_runtime_stop_offset(bool rejected_frame)
 
 void motor_runtime_init(void)
 {
+#if BOARD_DQ_CURRENT_LOOP
+    current_loop_init();
+#endif
     board_disable_output();
     uint32_t previous_mask = board_enter_critical();
     motor_status_t initial_status = {0};
@@ -245,6 +251,9 @@ void motor_runtime_stop(void)
     }
     button_phase=0u; button_seen=false;
     output_generation++; output_profile=NULL;
+#if BOARD_DQ_CURRENT_LOOP
+    current_loop_abort();
+#endif
     board_cancel_deadline();
     if (output_is_protected()) { runtime_status.state=MOTOR_RUNTIME_DISABLED; }
     board_leave_critical(mask);
@@ -335,6 +344,9 @@ bool motor_runtime_pulse(void)
         runtime_status.state=MOTOR_RUNTIME_STARTING;
         motor_runtime_stop_offset(false); /* 开始后永不再收集带流零偏候选。 */
         schedule_output_deadline();
+#if BOARD_DQ_CURRENT_LOOP
+        current_loop_begin(output_generation,runtime_status.estimated_offset);
+#endif
         accepted=runtime_status.state==MOTOR_RUNTIME_STARTING
             && board_prepare_pulse(output_profile->ticks,output_generation);
     }
@@ -371,6 +383,19 @@ bool motor_runtime_commit_output_at(uint32_t generation, uint32_t now_us)
     runtime_status.state=MOTOR_RUNTIME_ACTIVE; return true;
 }
 
+#if BOARD_DQ_CURRENT_LOOP
+bool motor_runtime_current_is_active(uint32_t generation)
+{
+    return runtime_status.state==MOTOR_RUNTIME_ACTIVE && generation==output_generation
+        && !motor_runtime_output_deadline_reached(board_get_time_us_locked()) && output_inputs_are_valid();
+}
+bool motor_runtime_current_sample_matches(uint32_t generation,uint32_t sequence,uint32_t sample_us)
+{
+    return motor_runtime_current_is_active(generation) && runtime_status.sample.sequence==sequence
+        && runtime_status.sample.current_completed_us==sample_us;
+}
+#endif
+
 bool motor_runtime_output_deadline_reached(uint32_t now_us)
 {
     return (runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
@@ -378,7 +403,7 @@ bool motor_runtime_output_deadline_reached(uint32_t now_us)
             || (BOARD_SINGLE_U && runtime_status.state==MOTOR_RUNTIME_STARTING && (int32_t)(now_us-arm_deadline_us)>=0));
 }
 
-#if BOARD_SCAN_ENABLED
+#if BOARD_SCAN_ENABLED && !BOARD_DQ_CURRENT_LOOP
 static void scan_step_sample(const motor_sample_t *sample)
 {
     if (runtime_status.state!=MOTOR_RUNTIME_ACTIVE) { return; }
@@ -530,8 +555,8 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
                 still_min=position_count; still_max=position_count;
             }
             if ((runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
-                && (position_count-action_origin>=(BOARD_SCAN_ENABLED ? 4000 : 46)
-                    || position_count-action_origin<=-(BOARD_SCAN_ENABLED ? 4000 : 46))) {
+                && (position_count-action_origin>=(BOARD_DQ_CURRENT_LOOP ? 256 : (BOARD_SCAN_ENABLED ? 4000 : 46))
+                    || position_count-action_origin<=-(BOARD_DQ_CURRENT_LOOP ? 256 : (BOARD_SCAN_ENABLED ? 4000 : 46)))) {
                 motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
             }
         }
@@ -540,7 +565,22 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
     runtime_status.sample.is_valid = is_valid;
     runtime_status.sample_count++;
 #if BOARD_SCAN_ENABLED
+    #if !BOARD_DQ_CURRENT_LOOP
     if (is_valid && offset_is_continuous) { scan_step_sample(sample); }
+#endif
+#endif
+#if BOARD_DQ_CURRENT_LOOP
+    if (is_valid && runtime_status.state==MOTOR_RUNTIME_ACTIVE) {
+        int32_t du=(int32_t)sample->raw_current_u_count*512-(int32_t)runtime_status.estimated_offset.sum_u_count;
+        int32_t dv=(int32_t)sample->raw_current_v_count*512-(int32_t)runtime_status.estimated_offset.sum_v_count;
+        if (!offset_is_continuous || du>128*512 || du< -128*512 || dv>128*512 || dv< -128*512
+            || du+dv>128*512 || du+dv< -128*512 || sample->raw_current_u_count==0u
+            || sample->raw_current_u_count==4095u || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u) {
+            motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
+        } else if (sample->current_completed_us-last_action.started_us>=250000u) {
+            last_action.reason=MOTOR_ACTION_DURATION;motor_runtime_stop();
+        } else { current_loop_queue(sample); }
+    }
 #endif
     if (is_valid) {
         runtime_status.has_valid_sample = true;
@@ -708,6 +748,9 @@ bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *acti
 static bool zero_is_ready(void)
 {
     return runtime_status.state==MOTOR_RUNTIME_DISABLED && runtime_status.fault_flags==0u
+#if BOARD_DQ_CURRENT_LOOP
+        && current_loop_is_ready()
+#endif
         && zero_explicit && !runtime_status.offset_is_aborted
         && runtime_status.estimated_offset.accepted_count==512u
         && runtime_status.estimated_offset.minimum_u_count>64u

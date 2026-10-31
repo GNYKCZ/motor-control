@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/* Firmware version: 31-17-27 | 2026-10-31 17:27 Asia/Shanghai */
+/* Firmware version: 31-18-45 | 2026-10-31 18:45 Asia/Shanghai */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -30,6 +30,8 @@
 /* USER CODE BEGIN Includes */
 #include "board_io.h"
 #include "motor_runtime.h"
+#include "current_loop.h"
+#include "board_config.h"
 #include "telemetry.h"
 #include "command.h"
   /* USER CODE END Includes */
@@ -129,7 +131,15 @@ int main(void)
     motor_runtime_check_deadline(now_us);
     motor_runtime_poll_button((GPIOA->IDR & GPIO_PIN_12)==0u, now_us);
     motor_runtime_poll_feedback();
-    if (!command_poll(now_us)) { telemetry_poll_status(HAL_GetTick()); }
+#if BOARD_DQ_CURRENT_LOOP
+    current_loop_poll();
+#endif
+    if (!command_poll(now_us)) {
+#if BOARD_DQ_CURRENT_LOOP
+        if (!current_loop_report_poll())
+#endif
+        { telemetry_poll_status(HAL_GetTick()); }
+    }
   }
   /* USER CODE END 3 */
 }
