@@ -10,6 +10,8 @@
 
 ## 项目边界与入口
 
+在单个对话中处理已授权工作包时，按[子智能体分工](docs/issue_workflow_prompts.md#子智能体分工)委派设计与独立审查。主对话承担 Work，负责实现、验证和交付。
+
 - [Issue #1](https://github.com/GNYKCZ/motor-control/issues/1)：单电机、单编码器条件下的 STM32 电机侧伺服与电流形式的柔顺原型。
 - [Issue #2](https://github.com/GNYKCZ/motor-control/issues/2)：MATLAB/Simulink 柔性关节双编码器伺服及接触阻抗仿真，不新增硬件。Python 仅作辅助分析，环境暂缺不授权更换主平台。
 - 主 Issue 是路线图，不是全项目无限授权。按用户授权的可验收工作包推进；一个包可含多个有依赖的小步骤，内部步骤完成后自动续接，不每步等待重派，不预建空目录或无调用者抽象。
