@@ -130,7 +130,7 @@ static diag_irq_snapshot_t irq_snapshot(uint32_t completed_us)
 {
     diag_irq_snapshot_t s;
     s.before_us=completed_us;s.after_us=completed_us+1u; /* 生产顺序：完成时刻≤读前≤读后 */
-    s.tim1_cnt=(uint16_t)pwm_tim1.CNT.value;s.tim2_cnt=(uint16_t)(completed_us&0xffffu);
+    s.tim1_cnt=(uint16_t)pwm_tim1.CNT.value;s.tim2_cnt=(uint16_t)(diag_trace_adc_phase()+2u);
     s.pins=(uint8_t)(((pwm_gpioa.IDR.value>>8u)&0x7u)
         | (((pwm_tim1.BDTR.value&TIM_BDTR_MOE)!=0u) ? 0x8u : 0u));
     s.dir=(uint8_t)(((pwm_tim1.CR1.value&TIM_CR1_DIR)!=0u) ? 1u : 0u);
@@ -149,6 +149,9 @@ static void sample(bool poll=true,uint16_t raw_u=2027u,uint16_t raw_v=2028u)
     motor_runtime_handle_sample(&s);
     if (poll) { motor_runtime_poll_feedback(); }
 }
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+static uint16_t boot_phase_us=225u;
+#endif
 static void reset(uint32_t base=0u)
 {
 #if BOARD_SCAN_ENABLED
@@ -171,6 +174,9 @@ static void reset(uint32_t base=0u)
     motor_runtime_init();command_init();board_initialize_output();
     #if BOARD_DQ_CURRENT_LOOP
     pwm_tim1.CR1.value|=TIM_CR1_CEN; /* 对应board_start_sampling；IDLE配置快照已在其之前记录。 */
+#endif
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    diag_trace_set_adc_phase(boot_phase_us); /* board_start_sampling硬件回读的夹具替身。 */
 #endif
     motor_runtime_finish_boot(true);
     for (unsigned i=0u;i<100u;++i) { now_us+=100u;sample(); }

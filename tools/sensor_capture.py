@@ -47,7 +47,7 @@ def parse_line(raw):
     if not raw.endswith(b"\n"):
         raise ValueError("unterminated line")
     if raw.startswith(b"FW1,"):
-        match=re.fullmatch(rb"FW1,([0-9]{2}-[0-9]{2}-[0-9]{2}),(ALIGN_POS|ALIGN_NEG|SCAN_POS|SCAN_NEG|GATE_TEST|PULSE_V_TEST|SINGLE_U)\r\n",raw)
+        match=re.fullmatch(rb"FW1,([0-9]{2}-[0-9]{2}-[0-9]{2}),(ALIGN_POS|ALIGN_NEG|SCAN_POS|SCAN_NEG|GATE_TEST|PULSE_V_TEST|SINGLE_U|DQ_VEC0|DQ_VEC0_LOW225|DQ_VEC0_HIGH250|DQ_VEC0_INVALID|DQ_ZERO)\r\n",raw)
         if not match:
             raise ValueError("firmware banner layout mismatch")
         day,hour,minute=map(int,match[1].split(b"-"))

@@ -9,6 +9,8 @@
 #if !BOARD_DQ_VECTOR_DIAGNOSTIC
 
 void diag_trace_init(void) {}
+void diag_trace_set_adc_phase(uint16_t us) { (void)us; }
+uint16_t diag_trace_adc_phase(void) { return 0u; }
 void diag_trace_sample(const diag_irq_snapshot_t *snapshot,const motor_sample_t *sample)
 { (void)snapshot;(void)sample; }
 void diag_trace_config(const diag_config_t *config) { (void)config; }
@@ -23,6 +25,9 @@ bool diag_trace_report_poll(void) { return false; }
 static diag_sample_t pre_samples[DIAG_TRACE_PRE_SLOTS];
 static diag_sample_t body_samples[DIAG_TRACE_BODY_SLOTS];
 static diag_config_t configurations[DIAG_TRACE_CONFIG_SLOTS];
+static uint16_t adc_phase_us;
+void diag_trace_set_adc_phase(uint16_t us) { adc_phase_us=us; }
+uint16_t diag_trace_adc_phase(void) { return adc_phase_us; }
 static unsigned pre_next,pre_used;      /**< 动作前环形写指针与已写入条数。 */
 static unsigned pre_count,pre_start;    /**< 冻结时的有效条数与最旧位置。 */
 static unsigned body_used,config_used;
@@ -43,6 +48,7 @@ static unsigned line_length;
 
 void diag_trace_init(void)
 {
+    adc_phase_us=0u;
     memset(pre_samples,0,sizeof(pre_samples));
     memset(body_samples,0,sizeof(body_samples));
     memset(configurations,0,sizeof(configurations));
@@ -214,7 +220,7 @@ static void build_header(void)
     /* trip_index按导出序号给出：动作前样本占前sealed_pre条，避免与body索引混淆。 */
     word(trip_index==DIAG_TRACE_NO_INDEX ? DIAG_TRACE_NO_INDEX : trip_index+sealed_pre);
     word(first);word(freeze_reason);word(freeze_sequence);
-    word(config_used);word(action_generation);
+    word(config_used);word(action_generation);word(adc_phase_us);
 }
 
 static void build_config_timer(const diag_config_t *c)

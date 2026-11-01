@@ -45,7 +45,22 @@ static void dq_frame(uint32_t event,uint16_t u=2027u,uint16_t v=2028u,bool compu
 }
 int main(void)
 {
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    for (uint16_t phase : {225u,250u}) {
+        boot_phase_us=phase;reset();command_enable_version_report();CHECK(command_poll(now_us));
+        CHECK(std::strstr(scan_wire, phase==225u ? "DQ_VEC0_LOW225" : "DQ_VEC0_HIGH250"));
+        if (phase==250u) {
+            fixed_angle=true;button_steps(true,300u);CHECK(motor_runtime_restart_zero());
+            button_steps(true,512u);button_steps(false,30u);
+            motor_action_t a;motor_log_snapshot_t l;CHECK(motor_runtime_read_reply(&l,&a));
+            CHECK(enables==0u && a.id==0u);check_closed();
+        }
+    }
+#endif
     for (uint16_t angle : {0u,4096u,7453u,16000u}) {
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+        boot_phase_us=angle==4096u ? 250u : 225u;
+#endif
         dq_prepare(angle);motor_log_snapshot_t log;motor_action_t action;CHECK(motor_runtime_read_reply(&log,&action));
         uint32_t event=action.started_us;double iu=0,iv=0,previous_u=0,previous_v=0;
         for (unsigned k=0u;k<=(BOARD_DQ_VECTOR_DIAGNOSTIC ? 19u : 250u);++k) {
@@ -57,7 +72,7 @@ int main(void)
             double a=std::exp(-5.5*0.000773/0.0008),b=std::exp(-5.5*0.000227/0.0008);
             iu=a*iu+(1-a)*previous_u/5.5;iu=b*iu+(1-b)*vu/5.5;
             iv=a*iv+(1-a)*previous_v/5.5;iv=b*iv+(1-b)*vv/5.5;previous_u=vu;previous_v=vv;
-            if (BOARD_DQ_VECTOR_DIAGNOSTIC) { timer_tick(227u); }
+            if (BOARD_DQ_VECTOR_DIAGNOSTIC) { timer_tick(diag_trace_adc_phase()+2u); }
             else { now_us+=227u; }
             sample(true,(uint16_t)std::lround(2027.0+iu/BOARD_NOMINAL_A_PER_COUNT),(uint16_t)std::lround(2028.0+iv/BOARD_NOMINAL_A_PER_COUNT));
             current_loop_poll();

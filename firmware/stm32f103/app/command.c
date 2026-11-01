@@ -4,8 +4,10 @@
 #include "board_io.h"
 #include "motor_runtime.h"
 #include "board_config.h"
+#include "diag_trace.h"
 #include "current_loop.h"
 #include <stddef.h>
+#include <string.h>
 
 enum { REPLY_OK=0, REPLY_FORMAT=1, REPLY_CRC=2, REPLY_SEQUENCE=3,
        REPLY_DENIED=4, REPLY_UART=5, REPLY_TIMEOUT=6, REPLY_SNAPSHOT=7 };
@@ -289,10 +291,20 @@ static bool report_version(void)
 #else
 #define FIRMWARE_MODE "SCAN_POS"
 #endif
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    static const char low[]="FW1," BOARD_FIRMWARE_VERSION ",DQ_VEC0_LOW225\r\n";
+    static const char high[]="FW1," BOARD_FIRMWARE_VERSION ",DQ_VEC0_HIGH250\r\n";
+    static const char invalid[]="FW1," BOARD_FIRMWARE_VERSION ",DQ_VEC0_INVALID\r\n";
+    uint16_t phase=diag_trace_adc_phase();
+    const char *line=phase==250u ? high : (phase==225u ? low : invalid);
+    size_t length=strlen(line);
+#else
     static const char line[]="FW1," BOARD_FIRMWARE_VERSION "," FIRMWARE_MODE "\r\n";
+    size_t length=sizeof(line)-1u;
+#endif
     if (version_report!=1u) { return false; }
     if (board_serial_is_busy()) { return true; }
-    if (board_start_serial_write(line,sizeof(line)-1u)) { version_report=2u; }
+    if (board_start_serial_write(line,length)) { version_report=2u; }
     return true;
 }
 

@@ -104,6 +104,16 @@ bool board_start_sampling(void)
     board_disable_output();
     /* 在ADC/触发启动前重装PSC/ARR/RCR和计数方向，排除HAL初始化UG残留相位。
      * 此UG仅初始化使用，所有运行期PWM事务仍不允许UG。 */
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* PA12只在复位准备阶段采样一次；开门仍需READY后一个新手势。 */
+    uint16_t phase_us=(GPIOA->IDR & GPIO_PIN_12) ? 225u : 250u;
+    if ((TIM2->CR1 & TIM_CR1_CEN) || (TIM1->BDTR & TIM_BDTR_MOE)) { return false; }
+    TIM2->CCR2=phase_us;
+    TIM2->EGR=TIM_EGR_UG; /* ADC未启动，装载预置CCR2。 */
+    uint16_t readback=(uint16_t)TIM2->CCR2;
+    if (readback!=phase_us) { return false; }
+    diag_trace_set_adc_phase(readback);
+#endif
     TIM1->CR1 &= ~(TIM_CR1_CEN | TIM_CR1_DIR);
     TIM1->CNT=0u;
     TIM1->EGR=TIM_EGR_UG;

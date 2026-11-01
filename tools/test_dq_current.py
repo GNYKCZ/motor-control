@@ -106,6 +106,8 @@ for reference,vector in ((0,0),(40,0),(-40,0),(0,1)):
   # 篡改单帧必须被拒绝，不能静默补齐。
   wire=re.search(r'DQ_TRACE_NORMAL_BEGIN\n(.*?)DQ_TRACE_NORMAL_END',full_output,re.S)[1]
   # 通用采集不能把原始记录帧当成无效行。
+  for phase in ('LOW225','HIGH250'):
+   assert parse_line(('FW1,01-13-07,DQ_VEC0_'+phase+'\r\n').encode())['mode'].endswith(phase)
   assert parse_line(([line for line in wire.splitlines() if line.startswith('P1T')][0]+'\r\n').encode())['format']=='P1T0'
   damaged=bytearray(wire.encode());spot=damaged.find(b'P1T1,');damaged[spot+6]=ord('F') if damaged[spot+6]!=ord('F') else ord('0')
   try: trace_reports(bytes(damaged)); raise AssertionError('corrupted trace accepted')
@@ -124,7 +126,11 @@ for reference,vector in ((0,0),(40,0),(-40,0),(0,1)):
    body[1+index]='%08X'%value
    text=','.join(body)+','
    return text+'%04X'%binascii.crc_hqx(text.encode(),0xffff)
-  try: trace_reports(rebuild([reframe(lines[0],0,2)]+lines[1:])); raise AssertionError('trace version accepted')
+  assert trace_reports(rebuild(lines))[0]['phase_consistent'] is True
+  assert trace_reports(rebuild([reframe(lines[0],13,250)]+lines[1:]))[0]['phase_consistent'] is False
+  legacy=lines[0].split(',')[:-2];legacy[1]='00000001';body=','.join(legacy)+','
+  assert trace_reports(rebuild([body+'%04X'%binascii.crc_hqx(body.encode(),0xffff)]+lines[1:]))[0]['phase_consistent'] is None
+  try: trace_reports(rebuild([reframe(lines[0],0,3)]+lines[1:])); raise AssertionError('trace version accepted')
   except ValueError: pass
  (out/(tag+'_report.json')).write_text(json.dumps(parsed,indent=2)+'\n')
  if reference==0 and not vector:

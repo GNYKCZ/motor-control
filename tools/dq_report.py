@@ -78,6 +78,7 @@ def parse_trace(frame):
     match=re.fullmatch(rb'P1T[0-5],(?:[0-9A-F]{8},)+[0-9A-F]{4}\r\n',frame)
     if not match:raise ValueError('trace frame format')
     parts=frame[:-2].split(b',');name=parts[0].decode();keys=TRACE_LAYOUT[name]
+    if name=='P1T0' and int(parts[1],16)==2:keys=keys+['adc_phase_us']
     if len(parts)!=len(keys)+2:raise ValueError('trace width')
     if binascii.crc_hqx(frame[:-6],0xffff)!=int(parts[-1],16):raise ValueError('trace CRC')
     return {"format":name,**{key:int(value,16) for key,value in zip(keys,parts[1:-1])}}
@@ -88,7 +89,8 @@ def read_trace(frames):
     物理不完整（恢复窗口未收满、溢出）只记录标志，由调用者决定是否接受。"""
     if not frames or frames[0]['format']!='P1T0':raise ValueError('trace missing header')
     header=frames[0];position=1
-    if header['version']!=1:raise ValueError('trace format version')
+    if header['version']==2 and header.get('adc_phase_us') not in (225,250):raise ValueError('trace ADC phase')
+    if header['version'] not in (1,2):raise ValueError('trace format version')
     configs=[]
     for _ in range(header['configs']):
         triple=[]
@@ -159,7 +161,13 @@ def read_trace(frames):
         if entry['stage']==2 and entry['preload']:raise ValueError('trace stage2 already effective')
     if header['frozen'] and header['trip']!=0xffffffff and not 0<=header['trip']<header['total']:
         raise ValueError('trace trip index outside block')
-    return dict(header=header,configs=configs,samples=samples,tail=tail,post=post,
+    # IRQ快照应落在采样触发之后；仅在距前/后切换沿有余量时用于核对相位。
+    phase=header.get('adc_phase_us')
+    usable=[s for s in samples if s['stage']==2 and s['flags']&FLAG_VALID and not s['flags']&FLAG_EDGE]
+    consistent=None
+    if phase and usable:
+        consistent=all(phase<=s['tim2']<phase+12 for s in usable)
+    return dict(phase_consistent=consistent,phase_samples=len(usable),header=header,configs=configs,samples=samples,tail=tail,post=post,
         complete=bool(header['complete']),overflow=bool(header['overflow']),frozen=bool(header['frozen']),
         trip_index=header['trip'],stages=stages)
 

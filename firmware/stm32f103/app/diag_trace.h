@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define DIAG_TRACE_FORMAT_VERSION 1u     /**< 帧内格式版本；布局变化必须递增。 */
+#define DIAG_TRACE_FORMAT_VERSION 2u     /**< 帧内格式版本；布局变化必须递增。 */
 #define DIAG_TRACE_PRE_SLOTS 16u         /**< 动作前环形样本，动作建立时冻结，不再覆盖。 */
 #define DIAG_TRACE_BODY_SLOTS 48u        /**< 启动/动作/首次故障/停机后恢复的线性样本。 */
 #define DIAG_TRACE_CONFIG_SLOTS 4u       /**< 空闲、零矢量开门、50%生效、首次停机各一次。 */
@@ -75,6 +75,9 @@ typedef struct {
 
 /** 归零全部记录状态；只在前台初始化调用，不清除任何故障或输出资格。 */
 void diag_trace_init(void);
+/** ADC启动前一次记录实际TIM2 CCR2读回值，单位us。 */
+void diag_trace_set_adc_phase(uint16_t us);
+uint16_t diag_trace_adc_phase(void);
 /** ADC完成IRQ、runtime校验与保护判定之前调用；只做整数复制和有界写入。 */
 void diag_trace_sample(const diag_irq_snapshot_t *snapshot, const motor_sample_t *sample);
 /** board_pwm在明确阶段调用；寄存器值由调用者读好传入，本模块不访问设备。 */

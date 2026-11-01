@@ -25,9 +25,17 @@ assert re.search(r"sConfigOC.OCMode = TIM_OCMODE_PWM2;\s+sConfigOC.Pulse = 225;.
 assert "sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T2_TRGO;" in adc
 assert "ADC_SAMPLETIME_7CYCLES_5" in adc and "ADC_DUALMODE_INJECSIMULT" in adc
 assert "ADC1.ExternalTrigInjecConv=ADC_EXTERNALTRIGINJECCONV_T2_TRGO" in ioc
-assert board.count("TIM1->EGR=TIM_EGR_UG;")==1 and "TIM2->EGR" not in board
+assert board.count("TIM1->EGR=TIM_EGR_UG;")==1 and board.count("TIM2->EGR=TIM_EGR_UG;")==1
 start=board.index("bool board_start_sampling")
 assert start < board.index("TIM1->EGR=TIM_EGR_UG;") < board.index("HAL_ADCEx_InjectedStart(&hadc2)",start)
+# 两种复位选择只在无输出且ADC未启动时更新TIM2预装载。
+assert start < board.index("TIM2->CCR2=phase_us;") < board.index("TIM2->EGR=TIM_EGR_UG;") < board.index("HAL_ADCEx_InjectedStart(&hadc2)",start)
+assert "TIM2->CR1 & TIM_CR1_CEN" in board and "TIM1->BDTR & TIM_BDTR_MOE" in board[start:]
+for trigger,expect_high in ((225,False),(250,True)):
+    carrier=(trigger*72)%3600
+    cnt=min(carrier,3600-carrier)
+    assert (cnt<900)==expect_high and abs(cnt-900)==900
+    assert 175+24< trigger and trigger+2-175<200
 configuration = hal[hal.index("HAL_StatusTypeDef HAL_TIM_PWM_ConfigChannel"):]
 assert configuration.index("TIM_OC2_SetConfig(htim->Instance, sConfig)") < configuration.index("htim->Instance->CCMR1 |= TIM_CCMR1_OC2PE")
 # HAL先写CCR2，再打开预装，初始OC2REF不依赖运行期手工UG。
