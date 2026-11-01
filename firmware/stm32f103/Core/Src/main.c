@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/* Firmware version: 01-13-07 | 2026-11-01 13:07 Asia/Shanghai */
+/* Firmware version: 01-14-00 | 2026-11-01 14:00 Asia/Shanghai */
 /**
   ******************************************************************************
   * @file           : main.c

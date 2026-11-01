@@ -33,12 +33,13 @@ bool board_start_sampling(void)
 '''+production+r'''
 }
 int main(void){
- for(unsigned pressed=0;pressed<2;pressed++){
-   a=(struct Timer){0};b=(struct Timer){0};gpio.IDR=pressed?0:4096;
-   expected=pressed?250:225;phase=0;order=0;assert(board_start_sampling());
-   assert(phase==expected && b.CCR2==expected && order==2 && a.CR1==1 && b.CR1==1 && !a.BDTR);
-   gpio.IDR^=4096; assert(!board_start_sampling());assert(phase==expected && order==2);
- }
+ /* 启动相位固定225us低电平窗；PA12不再参与复位准备。
+  * 第二次手势切250us由motor_runtime_poll_button负责，不在本函数覆盖范围。 */
+ a=(struct Timer){0};b=(struct Timer){0};gpio.IDR=4096;
+ expected=225;phase=0;order=0;assert(board_start_sampling());
+ assert(phase==expected && b.CCR2==expected && order==2 && a.CR1==1 && b.CR1==1 && !a.BDTR);
+ gpio.IDR=0; assert(!board_start_sampling());
+ assert(phase==expected && order==2);
 }
 '''
 path=out/'phase_boot.c';path.write_text(fixture,encoding='utf8')
@@ -46,4 +47,4 @@ gcc=Path('D:/mingw64/bin/gcc.exe');env=os.environ.copy();env['PATH']=str(gcc.par
 exe=out/'phase_boot.exe'
 subprocess.run([str(gcc),'-std=c11','-Wall','-Wextra','-Werror',str(path),'-o',str(exe)],check=True,env=env)
 subprocess.run([str(exe)],check=True,env=env)
-print('PASS production boot phase selection: 225/250, ADC armed only after preload, running re-selection rejected')
+print('PASS production boot phase: fixed 225us, ADC armed only after preload, running re-start rejected')

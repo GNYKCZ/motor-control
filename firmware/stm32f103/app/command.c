@@ -41,6 +41,9 @@ static const uint8_t alignment_widths[28]={8,2,2,2,8,8,2,2,2,2,2,4,8,8,8,8,
 enum { FLOW_OFF, FLOW_WAIT, FLOW_ZERO, FLOW_READY, FLOW_FAILED, FLOW_FINISHED };
 static unsigned flow_state, flow_notice;
 static unsigned version_report; /* 0未启用、1待发送、2本启动已发送。 */
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+static uint16_t reported_phase; /* 上次横幅对应的ADC相位；第二次手势切到250us后重报。 */
+#endif
 static volatile bool flow_enabled, flow_cancelled; /* UART IRQ取消与前台准备共用，重开事务另有短锁。 */
 static bool flow_zero_pending, flow_result_pending, flow_result_seen;
 static uint8_t flow_zero_result;
@@ -266,6 +269,10 @@ void command_enable_version_report(void)
 
 static bool report_version(void)
 {
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* 第二次手势把相位切到250us后需要重报横幅，否则串口仍显示LOW225。 */
+    if (version_report==2u && diag_trace_adc_phase()!=reported_phase) { version_report=1u; }
+#endif
 #if BOARD_DQ_CURRENT_LOOP
 #if BOARD_DQ_VECTOR_DIAGNOSTIC
 #define FIRMWARE_MODE "DQ_VEC0"
@@ -304,7 +311,12 @@ static bool report_version(void)
 #endif
     if (version_report!=1u) { return false; }
     if (board_serial_is_busy()) { return true; }
-    if (board_start_serial_write(line,length)) { version_report=2u; }
+    if (board_start_serial_write(line,length)) {
+        version_report=2u;
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+        reported_phase=phase;
+#endif
+    }
     return true;
 }
 

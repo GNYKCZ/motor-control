@@ -39,6 +39,9 @@ bool board_sampling_phase_is_ready(void);
 /** 前台启动 ADC/DMA 定时调度；仅在设备初始化成功、runtime 已 DISABLED 后调用一次。
  * 返回成功与否，失败不启动正常采样；无任何 PWM 通道启动操作。 */
 bool board_start_sampling(void);
+/** DQ_VEC0相位对照：运行时切换ADC注入触发相位(225us低电平窗/250us高电平窗)。
+ * 仅输出关闭时调用；返回写入回读是否一致，非诊断构建恒为false。 */
+bool board_set_adc_phase(uint16_t phase_us);
 /** 返回 1 MHz、32 bit 设备微秒计数，模 2^32（约 71.6 min）回绕。
  * 仅设备初始化成功后有效；在 IRQ 和前台均可调用，短临界区保护溢出扩展。 */
 uint32_t board_get_time_us(void);

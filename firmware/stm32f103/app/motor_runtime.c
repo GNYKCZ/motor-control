@@ -4,6 +4,7 @@
 #include "board_config.h"
 #include "board_io.h"
 #include "current_loop.h"
+#include "diag_trace.h"
 #include <stddef.h>
 
 #if (defined(MOTOR_GATE_TEST_PROFILES) || defined(MOTOR_LOCAL_PULSE_BASELINE)) && (defined(__ARM_ARCH) || defined(__arm__))
@@ -44,6 +45,8 @@ static uint32_t scan_applied_us, scan_submit_deadline_us;
 static unsigned scan_requested_step;
 static bool scan_pending;
 static bool button_spent, button_raw, button_seen, still_seen, fault_seen;
+/* DQ_VEC0相位对照：一次Reset允许两次手势，第一次225us低电平窗、第二次250us。 */
+static uint8_t button_count;
 static unsigned button_phase; /**< 0等稳定释放，1READY，2PRESSED；spent独立锁住本启动机会。 */
 static uint32_t button_last_us, button_changed_us, still_since_us;
 static uint16_t position_previous;
@@ -196,7 +199,7 @@ void motor_runtime_init(void)
     runtime_status = initial_status;
     runtime_status.state = MOTOR_RUNTIME_BOOT;
     runtime_status.pwm_is_permanently_blocked = motor_runtime_output_profile_count()==0u;
-    last_action=(motor_action_t){0}; button_spent=false; button_phase=0u; button_seen=false;
+    last_action=(motor_action_t){0}; button_spent=false; button_phase=0u; button_seen=false; button_count=0u;
     zero_began_us=0u; zero_ended_us=0u;
     zero_explicit=false;
     current_capture=(motor_current_snapshot_t){0};
@@ -580,7 +583,12 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
         int32_t du=(int32_t)sample->raw_current_u_count*512-(int32_t)runtime_status.estimated_offset.sum_u_count;
         int32_t dv=(int32_t)sample->raw_current_v_count*512-(int32_t)runtime_status.estimated_offset.sum_v_count;
         if (!offset_is_continuous || du>128*512 || du< -128*512 || dv>128*512 || dv< -128*512
-            || du+dv>128*512 || du+dv< -128*512 || sample->raw_current_u_count==0u
+#if !BOARD_DQ_VECTOR_DIAGNOSTIC
+            /* 闭环构建保留W推算判据；诊断构建下W由已知共模偏移翻倍必然越线(#26)，
+             * 只保留原始U/V，W留给事后从P1T1的raw_u/raw_v复算。 */
+            || du+dv>128*512 || du+dv< -128*512
+#endif
+            || sample->raw_current_u_count==0u
             || sample->raw_current_u_count==4095u || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u) {
             unsigned why=!offset_is_continuous ? 5u : ((sample->raw_current_u_count==0u || sample->raw_current_u_count==4095u
                 || sample->raw_current_v_count==0u || sample->raw_current_v_count==4095u) ? 4u
@@ -796,7 +804,17 @@ void motor_runtime_poll_button(bool pressed, uint32_t now_us)
         if (button_phase==0u && !pressed) { button_phase=1u; }
         else if (button_phase==1u && pressed) { button_phase=2u; }
         else if (button_phase==2u && !pressed) {
-            button_spent=true; /* 先消耗，资格失败/故障/STOP均不返还；只有Reset可建新机会。 */
+            /* DQ_VEC0对照：第一次手势用启动时的225us；第二次手势前切到250us并重装CCR2。
+             * 不重新采零，两组共用同一次静态零偏，只改变采样位置。 */
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+            if (button_count==1u) {
+                if (board_set_adc_phase(250u)) { diag_trace_set_adc_phase(250u); }
+            }
+            ++button_count;
+            if (button_count>=2u) { button_spent=true; } /* 第二次后关闭，只有Reset可建新机会。 */
+#else
+            button_spent=true; /* 其他构建仍保持一次Reset只允许一次输出。 */
+#endif
             last_action=(motor_action_t){1u,board_get_time_us(),0u,0u,MOTOR_ACTION_REJECTED,0u};
             action_origin=position_count;
             bool still=still_seen && board_get_time_us()-still_since_us>=250000u;

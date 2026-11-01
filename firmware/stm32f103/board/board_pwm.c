@@ -19,6 +19,27 @@ static bool output_was_enabled; /**< 本代次是否真正开过MOE；Break会�
 static bool stop_snapshot_needed; /**< 启动已发起但尚未通过校验：失败时也要留下停机配置快照。 */
 #define PHASE_CHANNELS (TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E)
 
+/** DQ_VEC0相位对照：运行时切换ADC注入触发相位(225us低电平窗/250us高电平窗)。
+ * 只在输出关闭时调用；真实目标写TIM2 CCR2并回读校验。
+ * 主机构建没有TIM2寄存器模型(pwm_model的CCR2与TIM1共用ID)，只验证相位选择逻辑。 */
+bool board_set_adc_phase(uint16_t phase_us)
+{
+#if BOARD_DQ_VECTOR_DIAGNOSTIC
+    if (phase_us!=225u && phase_us!=250u) { return false; }
+#if defined(__arm__) || defined(__ARM_ARCH)
+    if ((TIM2->CR1 & TIM_CR1_CEN)==0u) { return false; }
+    TIM2->CCR2=phase_us;
+    TIM2->EGR=TIM_EGR_UG; /* 立即装载，避免等TIM2自身更新事件。 */
+    return (uint16_t)TIM2->CCR2==phase_us;
+#else
+    return true;
+#endif
+#else
+    (void)phase_us;
+    return false;
+#endif
+}
+
 /** 阶段配置快照：寄存器在此读取后交给记录模块，记录本身不访问设备。
  * CCR是预装寄存器值；该阶段是否已装入有效比较值由ccr_is_preload单独标注。 */
 #if BOARD_DQ_VECTOR_DIAGNOSTIC

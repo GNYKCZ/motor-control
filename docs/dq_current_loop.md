@@ -237,3 +237,53 @@ CRC 失败都由 `tools/dq_report.py:trace_reports` 拒绝，不自动补齐。
 
 恢复窗口固定8条1kHz样本，等待上限12ms；采样已停止时按实际条数导出并置 `complete=0`，
 不会无限等待，也不会因此延长输出或重开 MOE。记录本身不参与任何保护判据。
+
+## DQ_VEC0 两次手势的采样相位对照（2026-11-01 13:46，板端 NOT RUN）
+
+为判断 PWM 共模下的表观偏差是否依赖 ADC 采样位置，DQ_VEC0 从“启动时读 PA12 电平选相位、
+一次 Reset 只能一次手势”改为“启动固定 225us、一次 Reset 允许两次手势”：
+
+| 手势 | 相位 | 说明 |
+|---|---|---|
+| 第 1 次 | 225us | 共同低电平 000 窗口中心附近；与之前 DQ_VEC0 相同 |
+| 第 2 次 | 250us | 共同高电平 111 窗口；第二次手势前由 `board_set_adc_phase()` 改 TIM2 CCR2 并重装 |
+
+- 启动时固定 `phase_us=225`（`board_io.c`），不再用 PA12 电平选择；
+- 第二次手势前 `motor_runtime_poll_button()` 调用 `board_set_adc_phase(250)`，失败则不改记录相位；
+- 未重新采零：两组共用本启动的 512 帧静态基线，只改变采样位置这一个变量；
+- 第二次手势后 `button_spent=true`，仍由 Reset 建新机会；非 DQ_VEC0 构建保持“一次 Reset 一次手势”；
+- 第二次手势后横幅会从 `DQ_VEC0_LOW225` 重报为 `DQ_VEC0_HIGH250`（`command.c` 按相位变化重置发送状态）；
+- 相位通过 `diag_trace_set_adc_phase()` 进入记录，`P1T0`/`P1T1` 的 `adc_phase` 可核对实际值。
+
+主机 `pwm_model` 没有 TIM2 寄存器模型（其 CCR2 与 TIM1 共用寄存器 ID），因此
+`board_set_adc_phase()` 在非 ARM 构建只验证相位取值、不访问 TIM2；真实目标写 CCR2、`EGR=UG` 装载并回读校验。
+这是环境限制，不代表目标构建跳过校验。
+
+本对照仍 `diagnostic_only/accepted=false`：不改变 PI、80mA dq 判据、128 count 原始判据和 20ms 截止，
+不重采零，不据此调整任何门限。板端结果若显示两个采样位置的偏差没有可重复差异，则不应继续在采样窗口上归因。
+
+## DQ_VEC0 保护降级（2026-11-01 14:00）
+
+13:46 的板端数据（`FW1,01-13-46`）确认：50% 零矢量下 `action_generation=2`、`adc_phase=250`
+说明两次手势与相位切换生效，但动作在进入 `ZERO` 后立即 `ACTION_FAILED`、`fault_flags=4`
+（`MOTOR_FAULT_EXPERIMENT`），20ms 采集无法完成。原因即 #26：`max(|id|,|iq|)≥87mA>80mA`、
+W 推算 −123mA 越过 128 count。
+
+为避免在诊断阶段被必然越线的判据拦截，**仅 `BOARD_DQ_VECTOR_DIAGNOSTIC` 构建**做如下降级：
+
+| 判据 | 诊断构建 | 闭环构建 |
+|---|---|---|
+| U 相 128 count | **保留，latch** | 保留，latch |
+| V 相 128 count | **保留，latch** | 保留，latch |
+| ADC 饱和 0/4095 | **保留，latch** | 保留，latch |
+| 偏移连续性 | **保留，latch** | 保留，latch |
+| W 推算 `du+dv` 128 count | **不 latch**（数据仍记录） | 保留，latch |
+| dq 绝对值 80mA / 跟踪误差 40mA | **不 latch**（数据仍记录） | 保留，latch |
+| `!ok`、cost>200us、提交时限 | 保留 | 保留 |
+
+- 原始 `P1T1` 的 `raw_u/raw_v` 与 `P1D1` 的 id/iq 照常记录，W 与 dq 越限量可由原始数据事后复算；
+- 这不是“放宽到不管”：真实过流仍由 U/V 各自的 128 count（≈103mA）与饱和值拦截；
+- 闭环构建（`BOARD_DQ_VECTOR_DIAGNOSTIC=0`）一个字未改，80mA/跟踪误差/W 判据全部保留；
+- 恢复到闭环判据的条件：完成占空比相关补偿标定后，把补偿值从控制路径扣除，再验证判据不再误触发。
+
+

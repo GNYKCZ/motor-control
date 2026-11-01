@@ -121,6 +121,10 @@ void current_loop_poll(void)
     if (!ok || cost>200u || computed-sample.current_completed_us>450u || used>=TRACE_COUNT) {
         motor_runtime_latch_fault(MOTOR_FAULT_FEEDBACK);return;
     }
+#if !BOARD_DQ_VECTOR_DIAGNOSTIC
+    /* 闭环构建：dq绝对值与跟踪误差仍打停。
+     * 诊断构建跳过：已知共模测量偏移使max(|id|,|iq|)>=87mA必然越线(#26)，
+     * id/iq仍逐点记录，原始U/V 128count由motor_runtime继续守真实过流。 */
     if (fabsf(result.measured.current_d_A)>0.08f || fabsf(result.measured.current_q_A)>0.08f
         || (elapsed>100000u && fabsf(result.measured.current_q_A-input.reference_q_A)>0.04f)) {
         unsigned why=fabsf(result.measured.current_d_A)>0.08f ? 7u : (fabsf(result.measured.current_q_A)>0.08f ? 8u : 9u);
@@ -128,6 +132,7 @@ void current_loop_poll(void)
         current_loop_capture_trip(why,&sample,milli(detail));
         motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);return;
     }
+#endif
 #if BOARD_DQ_VECTOR_DIAGNOSTIC
     /* 只取当前坐标观测；不采用PI计算的电压或积分，不再提交三相CCR更新。
      * 启动后CCR固定900/900/900；诊断记录latency0表示没有新的控制提交。 */
