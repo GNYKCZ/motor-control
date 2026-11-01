@@ -1,5 +1,5 @@
 /** 运行状态所有者。前台与 ADC/故障 IRQ 共享下列静态状态，统一以短临界区互斥。
- * 生产profile为空；合成profile仅在host构建中覆盖完整门控状态，不进入目标映像。 */
+ * 生产仅固定本地按键profile；串口无使能入口。合成profile仅在host构建，不进入目标映像。 */
 #include "motor_runtime.h"
 #include "board_config.h"
 #include "board_io.h"
@@ -14,6 +14,18 @@ typedef struct { board_pwm_ticks_t ticks; uint32_t arm_us, duration_us; } pwm_pr
 /* 只供host时间轨迹，不是实际电机的安全限值，不得进入目标构建。 */
 static const pwm_profile_t test_profile = {{100u,200u,300u,40u},10000u,1000u};
 #endif
+#ifndef MOTOR_GATE_TEST_PROFILES
+/* 商家标称R/L推导的12V低能量候选，不代表实测电流上界；只能由本地新手势消耗一次。 */
+static const pwm_profile_t local_profile = {{60u,0u,0u,434u},5000u,20000u};
+static bool motor_runtime_arm(unsigned profile_id);
+static bool motor_runtime_pulse(void);
+#endif
+static motor_action_t last_action;
+static bool button_spent, button_raw, button_seen, still_seen, fault_seen;
+static unsigned button_phase; /**< 0等稳定释放，1READY，2PRESSED；spent独立锁住本启动机会。 */
+static uint32_t button_last_us, button_changed_us, still_since_us;
+static uint16_t position_previous;
+static int32_t position_count, still_min, still_max, action_origin;
 static const pwm_profile_t *output_profile;
 static uint32_t output_generation, arm_deadline_us, pulse_deadline_us;
 
@@ -22,7 +34,7 @@ unsigned motor_runtime_output_profile_count(void)
 #ifdef MOTOR_GATE_TEST_PROFILES
     return 1u;
 #else
-    return 0u; /* 生产没有任何已批准profile，不提供动态注入接口。 */
+    return 1u; /* 唯一本地固定实验profile，不接受串口参数或动态注册。 */
 #endif
 }
 
@@ -60,6 +72,9 @@ static void expire_output(uint32_t now)
     } else if (now-runtime_status.feedback_completed_us>BOARD_FEEDBACK_GAP_LIMIT_US) {
         motor_runtime_latch_fault(MOTOR_FAULT_FEEDBACK);
     } else if ((int32_t)(now-(runtime_status.state==MOTOR_RUNTIME_ARMED ? arm_deadline_us : pulse_deadline_us))>=0) {
+        if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
+            last_action.reason=MOTOR_ACTION_DURATION;
+        }
         motor_runtime_stop();
     }
 }
@@ -145,6 +160,8 @@ void motor_runtime_init(void)
     runtime_status = initial_status;
     runtime_status.state = MOTOR_RUNTIME_BOOT;
     runtime_status.pwm_is_permanently_blocked = motor_runtime_output_profile_count()==0u;
+    last_action=(motor_action_t){0}; button_spent=false; button_phase=0u; button_seen=false;
+    still_seen=false; fault_seen=false; position_count=0; still_min=0; still_max=0;
     output_profile=NULL; output_generation++; arm_deadline_us=0u; pulse_deadline_us=0u;
     board_cancel_deadline();
     first_sample_time_us = 0u;
@@ -182,7 +199,14 @@ void motor_runtime_finish_boot(bool devices_are_ready)
 void motor_runtime_stop(void)
 {
     uint32_t mask=board_enter_critical();
+    if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
+        last_action.reason=MOTOR_ACTION_STOP;
+    }
     board_disable_output();
+    if (output_is_protected() && last_action.id!=0u && !(last_action.timing_flags & 0x40u)) {
+        last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u;
+    }
+    button_phase=0u; button_seen=false;
     output_generation++; output_profile=NULL;
     board_cancel_deadline();
     if (output_is_protected()) { runtime_status.state=MOTOR_RUNTIME_DISABLED; }
@@ -192,7 +216,13 @@ void motor_runtime_stop(void)
 void motor_runtime_latch_fault(motor_fault_t fault)
 {
     uint32_t mask=board_enter_critical();
-    motor_runtime_stop(); /* 资格撤销与禁用同一状态事务，不能在关MOE后被开始事务插入。 */
+    if (last_action.reason==MOTOR_ACTION_WAIT_START || last_action.reason==MOTOR_ACTION_ACTIVE) {
+        last_action.reason=MOTOR_ACTION_FAULT;
+    }
+    bool repeated=fault_seen; fault_seen=true;
+    unsigned old_button_phase=button_phase; bool old_button_seen=button_seen;
+    motor_runtime_stop(); /* 每条故障都撤销输出代次/期限；重复已锁存故障不阻止只读拒绝试验手势。 */
+    if (repeated) { button_phase=old_button_phase; button_seen=old_button_seen; }
     runtime_status.fault_flags |= (uint32_t)fault;
     runtime_status.state=MOTOR_RUNTIME_FAULT;
     motor_runtime_stop_offset(false);
@@ -219,6 +249,9 @@ static bool output_inputs_are_valid(void)
         && board_output_is_ready();
 }
 
+#ifndef MOTOR_GATE_TEST_PROFILES
+static
+#endif
 bool motor_runtime_arm(unsigned profile_id)
 {
     uint32_t mask=board_enter_critical();
@@ -226,7 +259,7 @@ bool motor_runtime_arm(unsigned profile_id)
 #ifdef MOTOR_GATE_TEST_PROFILES
     if (profile_id==1u) { candidate=&test_profile; }
 #else
-    (void)profile_id;
+    if (profile_id==1u) { candidate=&local_profile; }
 #endif
     bool accepted=candidate!=NULL && runtime_status.state==MOTOR_RUNTIME_DISABLED && output_inputs_are_valid();
     if (accepted) {
@@ -240,13 +273,21 @@ bool motor_runtime_arm(unsigned profile_id)
     return accepted;
 }
 
+#ifndef MOTOR_GATE_TEST_PROFILES
+static
+#endif
 bool motor_runtime_pulse(void)
 {
     uint32_t mask=board_enter_critical();
     bool accepted=runtime_status.state==MOTOR_RUNTIME_ARMED && output_profile!=NULL
         && (int32_t)(arm_deadline_us-board_get_time_us())>0 && output_inputs_are_valid();
     if (accepted) {
+#ifdef MOTOR_GATE_TEST_PROFILES
         pulse_deadline_us=board_get_time_us()+output_profile->duration_us;
+#else
+        /* 本地释放的绝对期限包含资格检查和STARTING，不能因内部事务耗时后移。 */
+        pulse_deadline_us=last_action.requested_us+output_profile->duration_us;
+#endif
         runtime_status.state=MOTOR_RUNTIME_STARTING;
         motor_runtime_stop_offset(false); /* 开始后永不再收集带流零偏候选。 */
         schedule_output_deadline();
@@ -265,6 +306,12 @@ bool motor_runtime_commit_output(uint32_t generation)
         || (int32_t)(pulse_deadline_us-board_get_time_us())<=0 || !output_inputs_are_valid()) { return false; }
     runtime_status.state=MOTOR_RUNTIME_ACTIVE;
     return true;
+}
+
+bool motor_runtime_output_deadline_reached(uint32_t now_us)
+{
+    return (runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
+        && (int32_t)(now_us-pulse_deadline_us)>=0;
 }
 
 void motor_runtime_handle_sample(const motor_sample_t *sample)
@@ -308,6 +355,32 @@ void motor_runtime_handle_sample(const motor_sample_t *sample)
                 runtime_status.sample.encoder.sequence);
         }
     }
+    if (is_valid) {
+        uint16_t raw=sample->encoder.raw_angle_count;
+        if (!still_seen) {
+            still_seen=true; position_previous=raw; position_count=0;
+            still_min=0; still_max=0; still_since_us=sample->current_completed_us;
+        } else {
+            int32_t step=(int32_t)((raw-position_previous)&16383u);
+            if (step>=8192) { step-=16384; }
+            position_previous=raw;
+            /* 无动作时只需维护有界静止窗口；活动期间4ms，计数和不会接近int32边界。 */
+            position_count+=step;
+            if (position_count<still_min) { still_min=position_count; }
+            if (position_count>still_max) { still_max=position_count; }
+            if (still_max-still_min>=16) {
+                still_since_us=sample->current_completed_us;
+                if (runtime_status.state!=MOTOR_RUNTIME_STARTING && runtime_status.state!=MOTOR_RUNTIME_ACTIVE) {
+                    position_count=0;
+                }
+                still_min=position_count; still_max=position_count;
+            }
+            if ((runtime_status.state==MOTOR_RUNTIME_STARTING || runtime_status.state==MOTOR_RUNTIME_ACTIVE)
+                && (position_count-action_origin>=46 || position_count-action_origin<=-46)) {
+                motor_runtime_latch_fault(MOTOR_FAULT_EXPERIMENT);
+            }
+        }
+    } else { still_seen=false; }
     runtime_status.sample = *sample;
     runtime_status.sample.is_valid = is_valid;
     runtime_status.sample_count++;
@@ -443,4 +516,60 @@ void motor_runtime_check_deadline(uint32_t now_us)
         schedule_output_deadline();
     }
     board_leave_critical(previous_mask);
+}
+
+/** board中断已持锁，只记录MOE写入近邻的MCU时间；0可以是合法回绕时刻。 */
+void motor_runtime_record_gate(bool opened, uint32_t now_us)
+{
+    if (last_action.id==0u) { return; }
+    if (opened) {
+        last_action.started_us=now_us; last_action.timing_flags |= 0x80u;
+        last_action.reason=MOTOR_ACTION_ACTIVE;
+    } else { last_action.ended_us=now_us; last_action.timing_flags |= 0x40u; }
+}
+
+bool motor_runtime_read_reply(motor_log_snapshot_t *status, motor_action_t *action)
+{
+    if (status==NULL || action==NULL) { return false; }
+    uint32_t mask=board_enter_critical();
+    bool valid=motor_runtime_read_log(status);
+    *action=last_action;
+    board_leave_critical(mask);
+    return valid;
+}
+
+void motor_runtime_poll_button(bool pressed, uint32_t now_us)
+{
+    uint32_t mask=board_enter_critical();
+    if (button_spent) { board_leave_critical(mask); return; }
+    if (!button_seen || now_us-button_last_us>5000u) {
+        button_seen=true; button_phase=0u; button_raw=pressed;
+        button_changed_us=now_us; button_last_us=now_us;
+        board_leave_critical(mask); return;
+    }
+    if (now_us-button_last_us<1000u) { board_leave_critical(mask); return; }
+    button_last_us=now_us;
+    if (pressed!=button_raw) { button_raw=pressed; button_changed_us=now_us; }
+    if (now_us-button_changed_us>=20000u) {
+        if (button_phase==0u && !pressed) { button_phase=1u; }
+        else if (button_phase==1u && pressed) { button_phase=2u; }
+        else if (button_phase==2u && !pressed) {
+            button_spent=true; /* 先消耗，资格失败/故障/STOP均不返还；只有Reset可建新机会。 */
+            last_action=(motor_action_t){1u,board_get_time_us(),0u,0u,MOTOR_ACTION_REJECTED,0u};
+            action_origin=position_count;
+            bool still=still_seen && board_get_time_us()-still_since_us>=250000u;
+            if (still && motor_runtime_arm(1u)) {
+                last_action.reason=MOTOR_ACTION_WAIT_START;
+                if (!motor_runtime_pulse()) { last_action.reason=MOTOR_ACTION_REJECTED; last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u; }
+            } else { last_action.ended_us=board_get_time_us(); last_action.timing_flags |= 0x40u; }
+        }
+    }
+    board_leave_critical(mask);
+}
+
+bool motor_runtime_output_is_busy(void)
+{
+    uint32_t mask=board_enter_critical();
+    bool busy=output_is_protected();
+    board_leave_critical(mask); return busy;
 }

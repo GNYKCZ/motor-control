@@ -124,6 +124,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t now_us = board_get_time_us();
     motor_runtime_check_deadline(now_us);
+    motor_runtime_poll_button((GPIOA->IDR & GPIO_PIN_12)==0u, now_us);
     motor_runtime_poll_feedback();
     if (!command_poll(now_us)) { telemetry_poll_status(HAL_GetTick()); }
   }

@@ -1,4 +1,4 @@
-/** 固定P1C1 23B / P1R1 56B；无printf、浮点、扫描或动态分配。
+/** 固定P1C1 23B / P1R2 95B；无printf、浮点、扫描或动态分配。
  * RX状态仅在UART IRQ/短临界区修改；TX缓冲只由前台修改，TC前保持借用。 */
 #include "command.h"
 #include "board_io.h"
@@ -16,12 +16,13 @@ static uint8_t rx_code;
 static bool rx_bad, rx_drop, have_sequence;
 static bool reply_pending;
 static reply_event_t pending_reply;
-static char reply_line[56];
+static char reply_line[95];
 static unsigned reply_index;
 static bool reply_building, reply_borrowed;
 static uint16_t reply_crc;
 static reply_event_t reply;
 static motor_log_snapshot_t reply_status;
+static motor_action_t reply_action;
 
 /** CCITT-FALSE: poly1021/initFFFF/no reflection/xorout0，最多8步。 */
 static uint16_t crc_byte(uint16_t crc, uint8_t byte)
@@ -146,18 +147,23 @@ static char hex_digit(uint32_t value, unsigned shift)
 /** 固定位置输出一字符；状态已经冻结，不在组帧过程中混读运行状态。 */
 static char reply_character(unsigned i)
 {
-    static const char prefix[]="P1R1,";
+    static const char prefix[]="P1R2,";
     if (i<5u) { return prefix[i]; }
     if (i<=12u) { return hex_digit(reply.sequence,(12u-i)*4u); }
-    if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u) { return ','; }
+    if (i==13u || i==16u || i==19u || i==22u || i==31u || i==40u || i==49u || i==58u || i==67u || i==76u || i==85u || i==88u) { return ','; }
     if (i<=15u) { return hex_digit(reply.code,(15u-i)*4u); }
     if (i<=18u) { return hex_digit(reply.result,(18u-i)*4u); }
     if (i<=21u) { return hex_digit((uint32_t)reply_status.state,(21u-i)*4u); }
     if (i<=30u) { return hex_digit(reply_status.fault_flags,(30u-i)*4u); }
     if (i<=39u) { return hex_digit(reply_status.sequence,(39u-i)*4u); }
     if (i<=48u) { return hex_digit(reply_status.completed_us,(48u-i)*4u); }
-    if (i<=53u) { return hex_digit(reply_crc,(53u-i)*4u); }
-    return i==54u ? '\r' : '\n';
+    if (i<=57u) { return hex_digit(reply_action.id,(57u-i)*4u); }
+    if (i<=66u) { return hex_digit(reply_action.requested_us,(66u-i)*4u); }
+    if (i<=75u) { return hex_digit(reply_action.started_us,(75u-i)*4u); }
+    if (i<=84u) { return hex_digit(reply_action.ended_us,(84u-i)*4u); }
+    if (i<=87u) { return hex_digit((uint32_t)reply_action.reason|reply_action.timing_flags,(87u-i)*4u); }
+    if (i<=92u) { return hex_digit(reply_crc,(92u-i)*4u); }
+    return i==93u ? '\r' : '\n';
 }
 
 bool command_poll(uint32_t now_us)
@@ -175,8 +181,8 @@ bool command_poll(uint32_t now_us)
         if (pending) { reply=pending_reply; reply_pending=false; }
         board_leave_critical(mask);
         if (!pending) { return false; }
-        if (!motor_runtime_read_log(&reply_status)) {
-            motor_log_snapshot_t empty={0}; reply_status=empty; reply.result=REPLY_SNAPSHOT;
+        if (!motor_runtime_read_reply(&reply_status,&reply_action)) {
+            motor_log_snapshot_t empty={0}; motor_action_t no_action={0}; reply_status=empty; reply_action=no_action; reply.result=REPLY_SNAPSHOT;
         }
         reply_index=0u; reply_crc=0xffffu; reply_building=true;
         return true;
@@ -184,7 +190,7 @@ bool command_poll(uint32_t now_us)
     if (board_serial_is_busy()) { return true; }
     char byte=reply_character(reply_index);
     reply_line[reply_index]=byte;
-    if (reply_index<50u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
+    if (reply_index<89u) { reply_crc=crc_byte(reply_crc,(uint8_t)byte); }
     reply_index++;
     if (reply_index==sizeof(reply_line)) {
         reply_building=false;

@@ -1,5 +1,5 @@
 /** 板级入口：使用生成的外设配置，拥有 DMA 私有缓冲和串口发送状态，runtime 不直接操作设备。
- * 主函数负责初始化/前台串口；中断负责完成帧发布。生产profile为空，外部命令不能使能PWM。 */
+ * 主函数负责初始化/前台串口；中断负责完成帧发布。固定本地按键profile，串口命令不能使能PWM。 */
 #ifndef BOARD_IO_H
 #define BOARD_IO_H
 #include <stdbool.h>

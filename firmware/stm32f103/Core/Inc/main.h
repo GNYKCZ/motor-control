@@ -61,6 +61,8 @@ void Error_Handler(void);
 #define ENCODER_CS_GPIO_Port GPIOA
 #define DRIVER_NFAULT_Pin GPIO_PIN_12
 #define DRIVER_NFAULT_GPIO_Port GPIOB
+#define LOCAL_ACTION_BUTTON_Pin GPIO_PIN_12
+#define LOCAL_ACTION_BUTTON_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 

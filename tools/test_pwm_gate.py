@@ -57,9 +57,31 @@ def main():
             exe = output / (tag + ".exe")
             run([*cpp, root / "tests/m1/test_pwm_gate.cpp", board, *objects, "-lm", "-o", exe])
             run([exe])
+            if not synthetic:
+                # 原真实board实现+新推进时钟回归：旧比较点不能通过同一压力场景。
+                baseline = output / "window_old_board.cpp"
+                baseline.write_bytes(subprocess.check_output(["git", "show",
+                    "35fc2209b24edb0abe11e4df55ad4e9e1ffe3cba:firmware/stm32f103/board/board_pwm.c"], cwd=root))
+                old_board = output / "window_old_board.o"
+                run([*cpp, "-include", model / "linkage.h", "-c", baseline, "-o", old_board])
+                old_exe = output / "window_old.exe"
+                run([*cpp, root / "tests/m1/test_pwm_gate.cpp", old_board, *objects, "-lm", "-o", old_exe])
+                old_result = subprocess.run([str(old_exe)], cwd=root, env=environment, capture_output=True,
+                                            text=True, timeout=30)
+                if old_result.returncode == 0 or "state==MOTOR_RUNTIME_ACTIVE && enables==1u" not in old_result.stderr:
+                    raise RuntimeError("advancing-clock regression did not reject old compare scheduling")
+                evidence["window_old_negative"] = {"returncode": old_result.returncode,
+                    "output": old_result.stdout + old_result.stderr,
+                    "board_sha256": hashlib.sha256(baseline.read_bytes()).hexdigest()}
         # RV-001反例：在Break处理后故意留下MOE，旧测试补救STOP会洗掉，新测试必须当场失败。
         # 只改变测试夹具的模拟寄存器，不改生产board/runtime/command，也不宣称真实固件有此缺陷。
         old = subprocess.check_output(["git", "show", "77e27db1c4f9aeb5109a610962707943de9fe94b:tests/m1/test_pwm_gate.cpp"], cwd=root).decode("utf-8")
+        # 旧夹具保留其补救STOP行为，仅把原始失联场景对齐本次3ms契约；用ARM避免1ms合成脉冲先到期。
+        old = old.replace("reset();CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();\n    timer_tick(300u);CHECK(status().state==MOTOR_RUNTIME_ACTIVE);",
+                          "reset();CHECK(motor_runtime_arm(1u));\n    timer_tick(3000u);CHECK(status().state==MOTOR_RUNTIME_ARMED);")
+        old = old.replace("reset(0xffffd800u);CHECK(motor_runtime_arm(1u));CHECK(motor_runtime_pulse());open_window();",
+                          "reset(0xffffd800u);CHECK(motor_runtime_arm(1u));")
+        old = old.replace("timer_tick(301u);", "timer_tick(3001u);").replace("now_us+=301u;", "now_us+=3001u;")
         current = (root / "tests/m1/test_pwm_gate.cpp").read_text(encoding="utf-8")
         anchor = "if (kind==2u) { TIM1_BRK_IRQHandler(); }"
         oracle = {}

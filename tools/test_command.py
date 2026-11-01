@@ -83,9 +83,9 @@ def main():
         run(cpp + ["-include", model / "linkage.h", "-x", "c++", "-c", fw / "board/board_uart.c", "-o", irq_object])
         run(cpp + [root / "tests/m1/test_uart_tc_race.cpp", irq_object, *model_objects, "-lm", "-o", output / "test_uart_tc_race.exe"])
         run([output / "test_uart_tc_race.exe"])
-        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R1,", "M3B3,")))
+        stream = b"".join((line + "\r\n").encode("ascii") for line in text.splitlines() if line.startswith(("P1R2,", "M3B3,")))
         records = [parse_line(line + b"\n") for line in stream.split(b"\n") if line]
-        replies = [r for r in records if r["format"] == "P1R1"]
+        replies = [r for r in records if r["format"] == "P1R2"]
         if not replies or any(replies[0][key] != value for key, value in {"q": 1, "c": 1, "r": 0, "s": 1, "f": 0, "n": 25, "t": 2500}.items()):
             raise RuntimeError("real runtime status snapshot mismatch")
         if not any(r["c"] == 2 and r["r"] == 128 for r in replies) or not any(r["c"] == 3 and r["r"] == 4 for r in replies):
@@ -94,7 +94,7 @@ def main():
         info = save_chunks([stream[:19], stream[19:61], stream[61:]], capture_dir, {"source_kind": "synthetic", "head": head})
         if info["invalid_lines"] or info["valid_lines"] != len(records):
             raise RuntimeError("mixed capture failed")
-        reply = next(line + b"\n" for line in stream.split(b"\n") if line.startswith(b"P1R1,"))
+        reply = next(line + b"\n" for line in stream.split(b"\n") if line.startswith(b"P1R2,"))
         # 所有位翻转都必须因布局/CRC拒绝，包括CRC字段和终止符；保留原行作为独立参照。
         rejected = 0
         for pos in range(len(reply)):
@@ -107,8 +107,16 @@ def main():
                     rejected += 1
                 else:
                     raise RuntimeError("single-bit reply corruption accepted")
+        golden = b"P1R2,00000001,01,00,01,00000000,00000019,000009C4,00000000,00000000,00000000,00000000,00,6B79\r\n"
+        if replies[0] != parse_line(golden) or len(reply) != 95 or rejected != 760:
+            raise RuntimeError("P1R2 independent golden/length/single-bit oracle mismatch")
+        zero_prefix = b"P1R2,00000002,01,00,01,00000000,00000001,00000000,00000001,FFFFFF00,00000000,00000000,C4,"
+        zero_frame = zero_prefix + f"{binascii.crc_hqx(zero_prefix,0xFFFF):04X}\r\n".encode()
+        zero = parse_line(zero_frame)
+        if zero["start"] != 0 or zero["why"] != 0xC4:
+            raise RuntimeError("wrapped zero timestamp lost validity")
         evidence.update(result="PASS", mixed_records=len(records), rejected_single_bits=rejected,
-                        request_bytes=23, reply_bytes=56, oracle="explicit golden strings; CRC-CCITT check 123456789=29B1; Python crc_hqx")
+                        request_bytes=23, reply_bytes=95, oracle="explicit golden strings; CRC-CCITT check 123456789=29B1; Python crc_hqx")
         evidence["RV-001"] = "PASS: actual ISR with W0C/RMW-arrival model, 23 STOP-byte overlaps, no SR write, TC retention/next-TX clear"
         print("PASS P1a-1 real runtime -> UART -> command -> reply -> capture, errors/priority/backpressure; no hardware")
     except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:

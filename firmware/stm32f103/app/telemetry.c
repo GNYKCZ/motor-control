@@ -69,6 +69,7 @@ static bool append_field(const char *name, uint32_t value, bool last)
 
 void telemetry_poll_status(uint32_t now_ms)
 {
+    if (motor_runtime_output_is_busy()) { next_field=0u; return; }
     if (next_field == 0u) {
         if (now_ms - last_export_ms < BOARD_TELEMETRY_PERIOD_MS) { return; }
         last_export_ms = now_ms;
