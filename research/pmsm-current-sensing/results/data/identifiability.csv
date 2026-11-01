@@ -1,0 +1,5 @@
+design,rank,condition,smallest_singular_value
+equal_duty,2,4.24701226556352e+16,5.02222675199779e-16
+constant_duty,1,Inf,0
+zero_sequence_one_vector,2,1.12022328691052e+16,1.86646279019418e-15
+vary_vector_and_zero_sequence,3,25.3791353100193,0.838557839270932

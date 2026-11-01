@@ -1,0 +1,8 @@
+check,passed
+analytic_123mA_60deg,1
+ADC_half_LSB,1
+two_sample_delay,1
+ADC_clipping,1
+512_frame_zero_offset,1
+Park_norm_invariant,1
+Simulink_vs_independent_matlab,1

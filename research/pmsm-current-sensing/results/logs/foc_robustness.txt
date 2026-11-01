@@ -1,0 +1,14 @@
+Robustness completed scenario matched
+Robustness completed scenario low_bus
+Robustness completed scenario high_bus
+Robustness completed scenario high_noise
+Robustness completed scenario slow_apply
+Robustness completed scenario R_high
+Robustness completed scenario L_low
+Robustness completed scenario flux_high
+Robustness completed scenario temperature_shift
+Robustness completed scenario bias_M2
+Robustness completed scenario bias_M3
+Robustness completed scenario no_bias
+Robustness completed scenario dynamic_rotor
+FOC_ROBUSTNESS_COMPLETE 234 cases; not all cases expected to pass

@@ -1,0 +1,2 @@
+Kt_Nm_per_A,Ts_s,delay_s,scalar_q_quantum_A,reference_limit_A,voltage_limit_V,simulink_error,linear_error
+0.026985,0.001,0.000775,0.0008056640625,0.04,0.4,0,1.38777878078145e-16

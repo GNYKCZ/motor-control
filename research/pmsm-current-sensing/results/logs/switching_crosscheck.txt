@@ -1,0 +1,8 @@
+PWM crosscheck reference=0 mean_error=3.1992e-18 refinement=1.94566e-16
+{错误使用 assert
+断言失败。
+
+出错 run_switching_crosscheck (第 9 行)
+ assert(a.trip==8 && b.trip==8 && fine.trip==8);assert(error<.01 && refine<.005);
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+}

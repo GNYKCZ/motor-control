@@ -1,0 +1,76 @@
+{
+  "result": "PASS",
+  "coverage": "Artifact consistency only; scope and scientific limitations audited in docs/requirements.md",
+  "checks": [
+    {
+      "artifact": "model_a_checks.csv",
+      "rows": 7
+    },
+    {
+      "artifact": "identifiability.csv",
+      "rows": 4
+    },
+    {
+      "artifact": "algorithm_comparison_A.csv",
+      "rows": 189
+    },
+    {
+      "artifact": "eso_comparison.csv",
+      "rows": 120
+    },
+    {
+      "artifact": "adaptation_stress.csv",
+      "rows": 16
+    },
+    {
+      "artifact": "o3_mismatch.csv",
+      "rows": 120
+    },
+    {
+      "artifact": "linear_current_loop.csv",
+      "rows": 54
+    },
+    {
+      "artifact": "foc_simulink.csv",
+      "rows": 7
+    },
+    {
+      "artifact": "unified_closed_loop.csv",
+      "rows": 351
+    },
+    {
+      "artifact": "comparison_summary.csv",
+      "rows": 117
+    },
+    {
+      "artifact": "o1_closed_loop.csv",
+      "rows": 78
+    },
+    {
+      "artifact": "control_boundaries.csv",
+      "rows": 7
+    },
+    {
+      "artifact": "seed_validation.csv",
+      "rows": 20
+    },
+    {
+      "artifact": "model_c_sweep.csv",
+      "rows": 24
+    },
+    {
+      "artifact": "switching_crosscheck.csv",
+      "rows": 2
+    },
+    {
+      "artifact": "phase_features.csv",
+      "rows": 2
+    },
+    {
+      "artifact": "issue2_interface.csv",
+      "rows": 1
+    }
+  ],
+  "hardware_tested": false,
+  "production_changed": false
+}

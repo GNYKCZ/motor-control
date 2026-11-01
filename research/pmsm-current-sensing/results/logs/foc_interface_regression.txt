@@ -1,0 +1,9 @@
+FOC_MODEL_BUILT
+FOC case original_bias trip=3 RMSE=NaN
+FOC case certificate_bias trip=8 RMSE=0.00147422
+FOC case unknown_certificate trip=4 RMSE=NaN
+FOC case no_bias trip=8 RMSE=0.00144307
+FOC case zero_reference trip=8 RMSE=0.00144892
+FOC case negative_reference trip=8 RMSE=0.0014749
+FOC case rotating trip=8 RMSE=0.00146429
+FOC_SIMULINK_PASS energy_error=2.77556e-17

@@ -1,0 +1,4 @@
+CONTROL_BOUNDARIES_PASS 7 failure/valid cases; saturation 9986; peak integral 0.438867 V
+O1 closed-loop completed RLS_frozen
+O1 closed-loop completed gradient_frozen
+O1_CLOSED_LOOP_PASS 78 new cases; unified 351 cases

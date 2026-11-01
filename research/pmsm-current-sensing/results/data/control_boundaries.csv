@@ -1,0 +1,8 @@
+case_name,trip_code
+valid_zero,0
+saturated_low,1
+saturated_high,1
+unknown_calibration,4
+bus_out_of_domain,4
+invalid_bound,4
+nonfinite_ADC,4

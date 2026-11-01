@@ -1,0 +1,7 @@
+{错误使用 assert
+断言失败。
+
+出错 run_control_boundaries (第 18 行)
+ assert(y(1)==1 && all(isfinite(y)));
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+}

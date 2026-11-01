@@ -1,0 +1,6 @@
+Environment: 24.2.0.2712019 (R2024b)
+Environment: 24.2.0.2712019 (R2024b)
+Environment: 24.2.0.2712019 (R2024b)
+Model A: 7 independent checks passed; Simulink error 9.02e-17 A
+Identification: 9 model comparisons, 189 algorithm cases; rank/gate/poisoning assertions passed
+MODEL_A_AND_IDENTIFICATION_COMPLETE

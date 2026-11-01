@@ -1,0 +1,22 @@
+PHASE_FEATURES_PASS low225/high250; synthetic M3 only
+FOC_MODEL_BUILT
+FOC case original_bias trip=3 RMSE=NaN
+FOC case certificate_bias trip=8 RMSE=0.00147422
+FOC case unknown_certificate trip=4 RMSE=NaN
+FOC case no_bias trip=8 RMSE=0.00144307
+FOC case zero_reference trip=8 RMSE=0.00144892
+FOC case negative_reference trip=8 RMSE=0.0014749
+FOC case rotating trip=8 RMSE=0.00146429
+FOC_SIMULINK_PASS energy_error=2.77556e-17
+          scenario           trip_code    dq_error_RMSE_A    peak_true_A    peak_integral_V    saturation_fraction
+    _____________________    _________    _______________    ___________    _______________    ___________________
+
+    "original_bias"              3                 NaN                0                0                0
+    "certificate_bias"           8           0.0014742         0.040589          0.21946                0
+    "unknown_certificate"        4                 NaN                0                0                0
+    "no_bias"                    8           0.0014431         0.040589          0.21972                0
+    "zero_reference"             8           0.0014489        0.0016132        0.0033037                0
+    "negative_reference"         8           0.0014749         0.040589          0.21981                0
+    "rotating"                   8           0.0014643         0.040456          0.23776                0
+
+COMPARISON_SUMMARY_PASS 117 rows from 351 saved runs

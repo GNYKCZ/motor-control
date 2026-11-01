@@ -1,0 +1,112 @@
+Environment: 24.2.0.2712019 (R2024b)
+Model A: 7 independent checks passed; Simulink error 9.02e-17 A
+Identification: 9 model comparisons, 189 algorithm cases; rank/gate/poisoning assertions passed
+      design      k_drift_A_per_duty          algorithm          convergence_50ms_within005_s    updates    final_k     current_RMSE_A
+    __________    __________________    _____________________    ____________________________    _______    ________    ______________
+
+    "constant"              0           "RLS_gated"                           NaN                    0             0        0.061481
+    "constant"              0           "gradient_gated"                      NaN                    0             0        0.061481
+    "constant"              0           "RLS_ungated"                         NaN                 2001      0.040585        0.039426
+    "constant"              0           "scalar_RLS_known_b0"                   0                  501        0.1229      0.00080498
+    "constant"           0.02           "RLS_gated"                           NaN                    0             0        0.068985
+    "constant"           0.02           "gradient_gated"                      NaN                    0             0        0.068985
+    "constant"           0.02           "RLS_ungated"                         NaN                 2001      0.044186        0.038439
+    "constant"           0.02           "scalar_RLS_known_b0"                   0                  501       0.12642       0.0059908
+    "excited"               0           "RLS_gated"                          0.05                  476       0.12318      0.00076899
+    "excited"               0           "gradient_gated"                      NaN                  476      0.088621       0.0080786
+    "excited"               0           "RLS_ungated"                       0.025                 2001       0.12339        0.039432
+    "excited"               0           "scalar_RLS_known_b0"                   0                  501       0.12281      0.00076772
+    "excited"            0.02           "RLS_gated"                          0.05                  476       0.12689       0.0064352
+    "excited"            0.02           "gradient_gated"                      NaN                  476      0.091374        0.009524
+    "excited"            0.02           "RLS_ungated"                       0.025                 2001       0.14119        0.038433
+    "excited"            0.02           "scalar_RLS_known_b0"                   0                  501       0.12653       0.0064373
+
+ADAPTATION_STRESS_PASS
+O3_MODEL_MISMATCH_COMPLETE 120 cases; accepted=47 rejected=73
+ESO: 120 comparisons; combined disturbance/bias rank 2 of 3
+    cases    allowed    unsafe_allowed_within_contract    unknown_certificate_stops
+    _____    _______    ______________________________    _________________________
+
+    50000     14294                   0                             true
+
+GUARD_CONDITIONAL_VALIDATION_PASS
+REF_HYPOTHESIS_PASS nominal=0.116505 A/duty observed=0.122905 inferred_path=966361 ohm buffered_assumed=2.35294e-05 A/duty
+            scenario               method        trip_reason     trip_time_s    active_dq_error_RMSE_A    peak_true_A    peak_integral_V    active_samples
+    ________________________    ____________    _____________    ___________    ______________________    ___________    _______________    ______________
+
+    "bias_M1"                   "raw"           "raw_W"                 0                    NaN                  0                0                0
+    "bias_M1"                   "zero_only"     "raw_W"                 0                    NaN                  0                0                0
+    "bias_M1"                   "fixed50"       "raw_W"                 0                    NaN                  0                0                0
+    "bias_M1"                   "offline_M1"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M1"                   "offline_M2"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M1"                   "offline_M3"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "raw"           "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "zero_only"     "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "fixed50"       "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "offline_M1"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "offline_M2"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M2"                   "offline_M3"    "raw_W"                 0                    NaN                  0                0                0
+    "bias_M3"                   "raw"           "duration"           0.25               0.042034           0.025128          0.13281            50000
+    "bias_M3"                   "zero_only"     "duration"           0.25               0.040728           0.021967          0.11369            50000
+    "bias_M3"                   "fixed50"       "raw_W"              0.03               0.081017           0.059999          0.28534             6000
+    "bias_M3"                   "offline_M1"    "raw_W"              0.03                0.08093           0.059978          0.28422             6000
+    "bias_M3"                   "offline_M2"    "raw_W"             0.031               0.079224           0.060307          0.28705             6200
+    "bias_M3"                   "offline_M3"    "duration"           0.25             0.00051343           0.040598          0.21962            50000
+    "no_bias"                   "raw"           "duration"           0.25               0.004257            0.04218          0.22682            50000
+    "no_bias"                   "zero_only"     "duration"           0.25             0.00038257           0.040586          0.21948            50000
+    "no_bias"                   "fixed50"       "dq_absolute"           0                    NaN                  0                0                0
+    "no_bias"                   "offline_M1"    "dq_absolute"           0                    NaN                  0                0                0
+    "no_bias"                   "offline_M2"    "dq_absolute"           0                    NaN                  0                0                0
+    "no_bias"                   "offline_M3"    "duration"           0.25               0.043707           0.072839          0.38663            50000
+    "zero_vector_diagnostic"    "raw"           "duration"           0.02                0.12176                  0                0             4000
+    "zero_vector_diagnostic"    "zero_only"     "duration"           0.02                0.12066                  0                0             4000
+    "zero_vector_diagnostic"    "fixed50"       "duration"           0.02              0.0025795                  0                0             4000
+    "zero_vector_diagnostic"    "offline_M1"    "duration"           0.02             0.00043478                  0                0             4000
+    "zero_vector_diagnostic"    "offline_M2"    "duration"           0.02             0.00043468                  0                0             4000
+    "zero_vector_diagnostic"    "offline_M3"    "duration"           0.02               0.079876                  0                0             4000
+
+MODEL_B_CORE_AND_PROTECTION_PASS oracle=6.20491e-08 refine=3.1225e-16
+    axis    R_factor    L_factor    delay_s     spectral_radius    bandwidth_Hz    dc_gain
+    ____    ________    ________    ________    _______________    ____________    _______
+
+    "d"        1           1        0.000775        0.97429           4.1702          1
+    "q"        1           1        0.000775        0.97424           4.2004          1
+
+LOCAL_LINEAR_SCAN_PASS 54 cases
+FOC_MODEL_BUILT
+FOC case original_bias trip=3 RMSE=NaN
+FOC case certificate_bias trip=8 RMSE=0.00147422
+FOC case unknown_certificate trip=4 RMSE=NaN
+FOC case no_bias trip=8 RMSE=0.00144307
+FOC case zero_reference trip=8 RMSE=0.00144892
+FOC case negative_reference trip=8 RMSE=0.0014749
+FOC case rotating trip=8 RMSE=0.00146429
+FOC_SIMULINK_PASS energy_error=2.77556e-17
+Robustness completed scenario matched
+Robustness completed scenario low_bus
+Robustness completed scenario high_bus
+Robustness completed scenario high_noise
+Robustness completed scenario slow_apply
+Robustness completed scenario R_high
+Robustness completed scenario L_low
+Robustness completed scenario flux_high
+Robustness completed scenario temperature_shift
+Robustness completed scenario bias_M2
+Robustness completed scenario bias_M3
+Robustness completed scenario no_bias
+Robustness completed scenario dynamic_rotor
+FOC_ROBUSTNESS_COMPLETE 273 cases; not all cases expected to pass
+CONTROL_BOUNDARIES_PASS 7 failure/valid cases; saturation 9986; peak integral 0.438867 V
+O1 closed-loop completed RLS_frozen
+O1 closed-loop completed gradient_frozen
+O1_CLOSED_LOOP_PASS 78 new cases; unified 351 cases
+ISSUE2_INTERFACE_PASS cross=0 linear=1.38778e-16 Kt=0.026985
+COMPARISON_SUMMARY_PASS 117 rows from 351 saved runs
+MODEL_C_SWITCHING_PASS 24 cases; average voltage error 0.00770474 V; refinement 0.000490824 A
+Crosscheck diagnostics: trips 8/8/8 error=9.97787e-19 refinement=1.59738e-16
+PWM crosscheck reference=0 mean_error=9.97787e-19 refinement=1.59738e-16
+Crosscheck diagnostics: trips 8/8/8 error=0.00241293 refinement=0.00180878
+PWM crosscheck reference=0.04 mean_error=0.00241293 refinement=0.00180878
+SWITCHING_CROSSCHECK_PASS
+{"result": "PASS", "host_cases": 50000, "allowed_cases": 8981, "max_bound_error_A": 1.4954371957420776e-07, "mcu_build": "NOT RUN; research candidate only", "production_integration": false, "source_sha256": "d6e43fed1c96692d058b88e7d1193920dbfafd7baaf6ac488d7f65550e2d380d"}
+REQUESTED_RESEARCH_STAGE_COMPLETE: all

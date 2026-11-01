@@ -1,0 +1,9 @@
+{
+  "result": "PASS",
+  "host_cases": 50000,
+  "allowed_cases": 8981,
+  "max_bound_error_A": 1.4954371957420776e-07,
+  "mcu_build": "NOT RUN; research candidate only",
+  "production_integration": false,
+  "source_sha256": "d6e43fed1c96692d058b88e7d1193920dbfafd7baaf6ac488d7f65550e2d380d"
+}
